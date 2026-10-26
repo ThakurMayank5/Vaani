@@ -7,8 +7,14 @@ const char* WIFI_SSID = "ThakurMayank";
 const char* WIFI_PASSWORD = "2c47G4=1";
 
 // ================= LED Configuration ===================
+// These IDs must stay in sync with the Go server's device constants.
+const uint8_t DEVICE_DESK_LIGHT = 1;
+const uint8_t DEVICE_READING_LIGHT = 2;
+const uint8_t DEVICE_ACCENT_LIGHT = 3;
+const uint8_t DEVICE_NIGHT_LIGHT = 4;
+
 const uint8_t ledPins[] = {18, 19, 21, 22};
-const uint8_t NUM_LEDS = 4;
+const uint8_t NUM_DEVICES = 4;
 
 // HTTP server listens on port 80
 WebServer server(80);
@@ -60,11 +66,11 @@ void handleLedCommand() {
     }
 
     // Validate device number
-    if (device < 1 || device > NUM_LEDS) {
+    if (device < DEVICE_DESK_LIGHT || device > DEVICE_NIGHT_LIGHT) {
         server.send(
             400,
             "text/plain",
-            "Invalid device. Use device:1 through device:4"
+            "Invalid device. Use a configured device ID"
         );
         return;
     }
@@ -103,7 +109,7 @@ void setup() {
     delay(500);
 
     // Configure LEDs; all LEDs start OFF
-    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+    for (uint8_t i = 0; i < NUM_DEVICES; i++) {
         pinMode(ledPins[i], OUTPUT);
         digitalWrite(ledPins[i], LOW);
     }

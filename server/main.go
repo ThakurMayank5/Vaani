@@ -302,7 +302,7 @@ func ledHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	// Set this to the URL printed or configured for your ESP32,
 	// e.g. http://192.168.1.105/led.
-	esp32URL = "http://192.168.137.64/led"
+	esp32URL = "http://192.168.137.182/led"
 	if esp32URL == "" {
 		log.Fatal("ESP32_URL is missing. Set it to http://<ESP32-IP>/led")
 	}

@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://10.104.200.21:42069';
+const API_BASE_URL = 'http://192.168.137.1:42069';
 
 export type DeviceState = 'ON' | 'OFF';
 

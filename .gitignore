@@ -54,3 +54,6 @@ Thumbs.db
 *~
 .idea/
 
+server/vaani.db
+server/vaani.db-shm
+server/vaani.db-wal

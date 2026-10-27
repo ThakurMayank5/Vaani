@@ -22,16 +22,16 @@ const (
 // to prevent ambient background chatter in noisy rooms from accidentally triggering lights.
 var defaultDeviceAliases = map[int][]string{
 	DeviceDeskLight: {
-		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic",
+		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic", "study lamp", "study light",
 	},
 	DeviceReadingLight: {
-		"reading", "read light", "book light", "halo", "helo",
+		"reading", "read light", "book light", "halo", "helo", "bedside light", "bedside lamp",
 	},
 	DeviceAccentLight: {
-		"accent", "ascent light", "ambient light", "ember", "amber", "amber light",
+		"accent", "ascent light", "ambient light", "ember", "amber", "amber light", "mood light",
 	},
 	DeviceNightLight: {
-		"night", "nite light", "bed light", "nova", "noah", "nover", "novo",
+		"night", "nite light", "bed light", "nova", "noah", "nover", "novo", "sleep light",
 	},
 }
 
@@ -42,12 +42,14 @@ var globalAllowedTokens = map[string]bool{
 	"can": true, "could": true, "you": true, "would": true, "it": true,
 	"all": true, "every": true, "everything": true, "entire": true, "whole": true,
 	"room": true, "living": true, "house": true, "home": true,
-	"lights": true, "light": true,
+	"lights": true, "light": true, "devices": true, "device": true,
+	"sab": true, "saari": true, "sabhi": true, "kuch": true, "karo": true, "kar": true, "do": true, "band": true, "chalu": true,
 }
 
 // Global scope keywords triggering multi-device operations.
 var globalAllKeywords = []string{
 	"all", "all lights", "all the lights", "everything", "every light", "entire room", "whole room", "lights", "light",
+	"sab", "sab lights", "sab kuch", "saari lights", "sabhi lights", "all devices",
 }
 
 // ParsedIntent represents the structured command extracted from raw transcribed speech.
@@ -133,7 +135,7 @@ func DetectAction(clean string) (action string, isQuery bool, isToggle bool) {
 	// 1. Status query phrases (whole phrase match)
 	queryPhrases := []string{
 		"what is the status", "what are the lights", "is the light on", "is the light off",
-		"are the lights on", "are the lights off", "status", "state", "check",
+		"are the lights on", "are the lights off", "status", "state", "check", "kya status hai",
 	}
 	for _, qp := range queryPhrases {
 		if hasWholeWordOrPhrase(clean, qp) {
@@ -145,6 +147,7 @@ func DetectAction(clean string) (action string, isQuery bool, isToggle bool) {
 	offPhrases := []string{
 		"turn off", "switch off", "power off", "shut down", "shut off",
 		"turn of", "switch of", "deactivate", "kill", "disable", "stop",
+		"band karo", "band kar do", "band kar", "bujha do",
 	}
 	for _, op := range offPhrases {
 		if hasWholeWordOrPhrase(clean, op) {
@@ -155,6 +158,7 @@ func DetectAction(clean string) (action string, isQuery bool, isToggle bool) {
 	// 3. On phrases
 	onPhrases := []string{
 		"turn on", "switch on", "power on", "activate", "enable", "start",
+		"chalu karo", "chalu kar do", "chalu kar", "jala do", "on karo",
 	}
 	for _, op := range onPhrases {
 		if hasWholeWordOrPhrase(clean, op) {
@@ -165,16 +169,16 @@ func DetectAction(clean string) (action string, isQuery bool, isToggle bool) {
 	// 4. Standalone token checks (e.g. "halo on", "desk light off")
 	tokens := Tokenize(clean)
 	for _, token := range tokens {
-		if token == "off" || token == "out" {
+		if token == "off" || token == "out" || token == "band" {
 			return "OFF", false, false
 		}
-		if token == "on" {
+		if token == "on" || token == "chalu" {
 			return "ON", false, false
 		}
 	}
 
 	// 5. Toggle phrases
-	togglePhrases := []string{"toggle", "flip", "invert"}
+	togglePhrases := []string{"toggle", "flip", "invert", "badal do"}
 	for _, tp := range togglePhrases {
 		if hasWholeWordOrPhrase(clean, tp) {
 			return "TOGGLE", false, true

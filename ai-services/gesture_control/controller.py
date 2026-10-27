@@ -11,10 +11,13 @@ class DeviceController:
     """Issues device commands only through the Go server, never directly to ESP."""
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        headers = kwargs.pop("headers", {})
+        headers["X-Control-Source"] = "gesture_ai"
         response = requests.request(
             method,
             f"{settings.GO_CONTROLLER_URL}{path}",
             timeout=settings.HTTP_TIMEOUT_SECONDS,
+            headers=headers,
             **kwargs,
         )
         try:

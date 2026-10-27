@@ -10,7 +10,7 @@ SERVICE_PORT = 43000
 PREVIEW_JPEG_QUALITY = 85
 
 # Change these two IP addresses when your local network addresses change.
-ESP32_CAM_IP = "192.168.137.66"
+ESP32_CAM_IP = "192.168.137.91"
 GO_CONTROLLER_IP = "192.168.137.1"
 
 # The ESP32-CAM normally exposes its MJPEG feed at port 81.

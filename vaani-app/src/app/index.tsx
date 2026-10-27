@@ -248,7 +248,7 @@ export default function HomeScreen() {
                     { backgroundColor: recorder.isRecording ? '#d12727' : '#0f62fe' },
                   ]}
                 />
-                <Text style={[styles.voiceCardTitle, { color: colors.text }]}></Text>
+                <Text style={[styles.voiceCardTitle, { color: colors.text }]}>Voice Control</Text>
                 {recorder.isRecording ? (
                   <Text style={[styles.recordingTimer, { color: '#d12727' }]}>
                     {`00:0${recorder.durationSeconds}s`}
@@ -514,9 +514,130 @@ const styles = StyleSheet.create({
   toggleColumn: { alignItems: 'flex-end', gap: Spacing.half, marginLeft: Spacing.two },
   stateLabel: { fontSize: 11, letterSpacing: 0.8, fontWeight: '700' },
   error: { color: '#d12727', marginTop: Spacing.three },
-  voiceCard: { borderRadius: 18, padding: Spacing.three, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.three },
-  voiceCopy: { flex: 1, gap: Spacing.half },
-  voiceButton: { minWidth: 74, minHeight: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.two },
+  voiceCard: {
+    borderRadius: 18,
+    padding: Spacing.three,
+    gap: Spacing.two,
+    marginBottom: Spacing.four,
+  },
+  voiceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  voiceTitleGroup: {
+    flex: 1,
+    gap: Spacing.half,
+  },
+  voiceBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  voicePulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  voiceCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  recordingTimer: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  voiceStatusText: {
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  voiceButton: {
+    minWidth: 84,
+    minHeight: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.three,
+  },
+  voiceButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  resultBox: {
+    borderRadius: 12,
+    padding: Spacing.two,
+    gap: Spacing.one,
+  },
+  resultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  resultLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  resultValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  resultBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  resultsList: {
+    marginTop: Spacing.half,
+    gap: 2,
+  },
+  deviceOutcome: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  suggestedContainer: {
+    gap: Spacing.one,
+    marginTop: Spacing.half,
+  },
+  suggestedTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  suggestedScroll: {
+    gap: Spacing.one,
+    paddingVertical: 2,
+  },
+  suggestedChip: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  suggestedChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  textCommandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    marginTop: Spacing.half,
+  },
+  textCommandInput: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 10,
+    paddingHorizontal: Spacing.two,
+    fontSize: 14,
+  },
+  sendButton: {
+    minHeight: 40,
+    paddingHorizontal: Spacing.two,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   scheduleHeader: { marginTop: Spacing.five, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.two },
   sectionTitle: { fontSize: 21, fontWeight: '700', marginBottom: Spacing.half },
   scheduleButton: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderRadius: 12 },

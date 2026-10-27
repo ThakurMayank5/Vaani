@@ -495,7 +495,7 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	// Set this to the URL printed or configured for your ESP32.
-	esp32URL = "http://192.168.137.21/led"
+	esp32URL = "http://192.168.137.174/led"
 	if esp32URL == "" {
 		log.Fatal("ESP32_URL is missing. Set it to http://<ESP32-IP>/led")
 	}

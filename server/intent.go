@@ -22,16 +22,20 @@ const (
 // to prevent ambient background chatter in noisy rooms from accidentally triggering lights.
 var defaultDeviceAliases = map[int][]string{
 	DeviceDeskLight: {
-		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic", "study lamp", "study light",
+		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic",
+		"study lamp", "study light", "light 1", "light one", "device 1", "device one", "one", "first",
 	},
 	DeviceReadingLight: {
 		"reading", "read light", "book light", "halo", "helo", "bedside light", "bedside lamp",
+		"light 2", "light two", "device 2", "device two", "two", "second",
 	},
 	DeviceAccentLight: {
 		"accent", "ascent light", "ambient light", "ember", "amber", "amber light", "mood light",
+		"light 3", "light three", "device 3", "device three", "three", "third",
 	},
 	DeviceNightLight: {
 		"night", "nite light", "bed light", "nova", "noah", "nover", "novo", "sleep light",
+		"light 4", "light four", "device 4", "device four", "four", "fourth",
 	},
 }
 
@@ -43,6 +47,7 @@ var globalAllowedTokens = map[string]bool{
 	"all": true, "every": true, "everything": true, "entire": true, "whole": true,
 	"room": true, "living": true, "house": true, "home": true,
 	"lights": true, "light": true, "devices": true, "device": true,
+	"hey": true, "vaani": true, "vani": true, "ok": true, "okay": true, "now": true, "just": true,
 	"sab": true, "saari": true, "sabhi": true, "kuch": true, "karo": true, "kar": true, "do": true, "band": true, "chalu": true,
 }
 

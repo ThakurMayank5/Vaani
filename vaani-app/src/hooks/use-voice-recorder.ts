@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 export type VoiceAudioPayload = {
-  uri?: string;
+  uri: string;
   blob?: Blob;
 };
 
@@ -21,8 +21,8 @@ export function useVoiceRecorder(): VoiceRecorderHook {
   const [error, setError] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const mediaRecorderRef = useRef<any>(null);
-  const webAudioChunksRef = useRef<Blob[]>([]);
+  const webRecorderRef = useRef<any>(null);
+  const webChunksRef = useRef<Blob[]>([]);
   const webStreamRef = useRef<MediaStream | null>(null);
   const nativeRecorderRef = useRef<any>(null);
 
@@ -37,11 +37,10 @@ export function useVoiceRecorder(): VoiceRecorderHook {
     stopTimer();
     setDurationSeconds(0);
     timerRef.current = setInterval(() => {
-      setDurationSeconds((prev) => prev + 1);
+      setDurationSeconds((d) => d + 1);
     }, 1000);
   }, [stopTimer]);
 
-  // Clean up resources on unmount
   useEffect(() => {
     return () => {
       stopTimer();
@@ -55,8 +54,8 @@ export function useVoiceRecorder(): VoiceRecorderHook {
   const startRecording = useCallback(async () => {
     setError(null);
 
-    // Web Platform Implementation
-    if (Platform.OS === 'web') {
+    // 1. Web Platform (Browser)
+    if (Platform.OS === 'web' || (typeof window !== 'undefined' && !!navigator?.mediaDevices?.getUserMedia)) {
       try {
         if (!navigator?.mediaDevices?.getUserMedia) {
           throw new Error('Microphone access is not supported in this browser.');
@@ -64,13 +63,14 @@ export function useVoiceRecorder(): VoiceRecorderHook {
 
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         webStreamRef.current = stream;
-        webAudioChunksRef.current = [];
+        webChunksRef.current = [];
 
-        // Check supported MIME types for Whisper compatibility
         let mimeType = 'audio/webm';
         if (typeof MediaRecorder !== 'undefined') {
           if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
             mimeType = 'audio/webm;codecs=opus';
+          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+            mimeType = 'audio/webm';
           } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
             mimeType = 'audio/mp4';
           } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
@@ -79,33 +79,42 @@ export function useVoiceRecorder(): VoiceRecorderHook {
         }
 
         const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        mediaRecorderRef.current = recorder;
+        webRecorderRef.current = recorder;
 
         recorder.ondataavailable = (event: BlobEvent) => {
           if (event.data && event.data.size > 0) {
-            webAudioChunksRef.current.push(event.data);
+            webChunksRef.current.push(event.data);
           }
         };
 
-        recorder.start(250); // Record in 250ms chunks
+        recorder.start(250);
         setIsRecording(true);
         startTimer();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Could not access microphone.';
+        return;
+      } catch (webErr) {
+        const message = webErr instanceof Error ? webErr.message : 'Could not access browser microphone.';
         setError(message);
         throw new Error(message);
       }
-      return;
     }
 
-    // Native Mobile Implementation (iOS & Android)
+    // 2. Mobile Native Platform (iOS / Android)
     try {
-      const expoAudio = require('expo-audio');
+      let expoAudio: any;
+      try {
+        expoAudio = require('expo-audio');
+      } catch {
+        throw new Error('expo-audio package is not available in this environment.');
+      }
+
       const { AudioModule, RecordingPresets, setAudioModeAsync } = expoAudio;
+      if (!AudioModule) {
+        throw new Error('AudioModule is not available in this build. Please test in a web browser or development build.');
+      }
 
       const permission = await AudioModule.requestRecordingPermissionsAsync();
       if (!permission.granted) {
-        throw new Error('Microphone permission was not granted. Please allow access in device settings.');
+        throw new Error('Microphone permission denied. Please allow microphone access in device settings.');
       }
 
       await setAudioModeAsync({
@@ -113,7 +122,14 @@ export function useVoiceRecorder(): VoiceRecorderHook {
         playsInSilentMode: true,
       });
 
-      const recorder = new expoAudio.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      // Check if native AudioRecorder is supported
+      if (typeof AudioModule.AudioRecorder !== 'function') {
+        throw new Error(
+          'expo-audio native recording is not available in standard Expo Go. Please run via web browser (npm run web) or build a development client (npx expo run:android).'
+        );
+      }
+
+      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
       nativeRecorderRef.current = recorder;
 
       await recorder.prepareToRecordAsync();
@@ -121,8 +137,8 @@ export function useVoiceRecorder(): VoiceRecorderHook {
 
       setIsRecording(true);
       startTimer();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not start mobile audio recorder.';
+    } catch (nativeErr) {
+      const message = nativeErr instanceof Error ? nativeErr.message : 'Could not start mobile audio recorder.';
       setError(message);
       throw new Error(message);
     }
@@ -132,10 +148,10 @@ export function useVoiceRecorder(): VoiceRecorderHook {
     stopTimer();
     setIsRecording(false);
 
-    // Web Platform Stop
-    if (Platform.OS === 'web') {
+    // 1. Web Platform Stop
+    if (Platform.OS === 'web' || webRecorderRef.current) {
       return new Promise<VoiceAudioPayload>((resolve, reject) => {
-        const recorder = mediaRecorderRef.current;
+        const recorder = webRecorderRef.current;
         if (!recorder) {
           reject(new Error('No active web recorder found.'));
           return;
@@ -144,14 +160,14 @@ export function useVoiceRecorder(): VoiceRecorderHook {
         recorder.onstop = () => {
           try {
             const blobType = recorder.mimeType || 'audio/webm';
-            const audioBlob = new Blob(webAudioChunksRef.current, { type: blobType });
+            const audioBlob = new Blob(webChunksRef.current, { type: blobType });
             const audioUrl = URL.createObjectURL(audioBlob);
 
             if (webStreamRef.current) {
               webStreamRef.current.getTracks().forEach((track) => track.stop());
               webStreamRef.current = null;
             }
-            mediaRecorderRef.current = null;
+            webRecorderRef.current = null;
 
             resolve({ uri: audioUrl, blob: audioBlob });
           } catch (err) {
@@ -167,7 +183,7 @@ export function useVoiceRecorder(): VoiceRecorderHook {
       });
     }
 
-    // Native Mobile Stop
+    // 2. Native Mobile Stop
     try {
       const recorder = nativeRecorderRef.current;
       if (!recorder) {
@@ -179,12 +195,12 @@ export function useVoiceRecorder(): VoiceRecorderHook {
       nativeRecorderRef.current = null;
 
       if (!uri) {
-        throw new Error('Recording ended but no audio file was generated.');
+        throw new Error('Recording ended, but audio data is unavailable.');
       }
 
       return { uri };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not stop audio recording.';
+      const message = err instanceof Error ? err.message : 'Could not stop recording.';
       setError(message);
       throw new Error(message);
     }
@@ -195,20 +211,17 @@ export function useVoiceRecorder(): VoiceRecorderHook {
     setIsRecording(false);
     setDurationSeconds(0);
 
-    if (Platform.OS === 'web') {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch (_) {}
-      }
-      if (webStreamRef.current) {
-        webStreamRef.current.getTracks().forEach((track) => track.stop());
-        webStreamRef.current = null;
-      }
-      mediaRecorderRef.current = null;
-      webAudioChunksRef.current = [];
-      return;
+    if (webRecorderRef.current && webRecorderRef.current.state !== 'inactive') {
+      try {
+        webRecorderRef.current.stop();
+      } catch (_) {}
     }
+    if (webStreamRef.current) {
+      webStreamRef.current.getTracks().forEach((track) => track.stop());
+      webStreamRef.current = null;
+    }
+    webRecorderRef.current = null;
+    webChunksRef.current = [];
 
     if (nativeRecorderRef.current) {
       try {

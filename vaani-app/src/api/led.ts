@@ -121,29 +121,63 @@ export async function createSchedule(schedule: CreateSchedule): Promise<Schedule
 }
 
 export async function transcribeAudio(audioData: string | Blob): Promise<string> {
-  const body = new FormData();
-  if (typeof audioData === 'string') {
-    if (Platform.OS === 'web' && audioData.startsWith('blob:')) {
+  // 1. Web Platform or raw Blob
+  if (Platform.OS === 'web' || audioData instanceof Blob) {
+    const body = new FormData();
+    let blob: Blob;
+    if (typeof audioData === 'string') {
       const response = await fetch(audioData);
-      const blob = await response.blob();
-      body.append('audio', blob, 'vaani-command.webm');
+      blob = await response.blob();
     } else {
-      body.append('audio', {
-        uri: audioData,
-        name: 'vaani-command.m4a',
-        type: 'audio/m4a',
-      } as unknown as Blob);
+      blob = audioData;
     }
-  } else {
-    body.append('audio', audioData, 'vaani-command.webm');
+    body.append('audio', blob, 'vaani-command.webm');
+
+    const response = await fetch(`${ASR_BASE_URL}/transcribe`, { method: 'POST', body });
+    const result = await readJSON<{ success: boolean; transcript: string }>(response);
+    if (!result.transcript || !result.transcript.trim()) {
+      throw new Error('No speech was detected. Please try again.');
+    }
+    return result.transcript.trim();
   }
 
-  const response = await fetch(`${ASR_BASE_URL}/transcribe`, { method: 'POST', body });
-  const result = await readJSON<{ success: boolean; transcript: string }>(response);
-  if (!result.transcript || !result.transcript.trim()) {
-    throw new Error('No speech was detected. Please try again.');
+  // 2. Mobile Native Platform (iOS & Android)
+  // Use expo-file-system/legacy uploadAsync to avoid React Native/Expo winter FormData Part error
+  try {
+    const { uploadAsync, FileSystemUploadType } = require('expo-file-system/legacy');
+    const response = await uploadAsync(`${ASR_BASE_URL}/transcribe`, audioData as string, {
+      fieldName: 'audio',
+      httpMethod: 'POST',
+      uploadType: FileSystemUploadType.MULTIPART,
+      mimeType: 'audio/m4a',
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`ASR server returned HTTP ${response.status}: ${response.body}`);
+    }
+
+    const result = JSON.parse(response.body) as { success: boolean; transcript?: string; message?: string };
+    if (!result.transcript || !result.transcript.trim()) {
+      throw new Error('No speech was detected. Please speak closer to the microphone.');
+    }
+    return result.transcript.trim();
+  } catch (nativeErr) {
+    // If native upload fails, try fetching local URI as Blob
+    try {
+      const res = await fetch(audioData as string);
+      const fileBlob = await res.blob();
+      const body = new FormData();
+      body.append('audio', fileBlob, 'vaani-command.m4a');
+      const response = await fetch(`${ASR_BASE_URL}/transcribe`, { method: 'POST', body });
+      const result = await readJSON<{ success: boolean; transcript: string }>(response);
+      if (!result.transcript || !result.transcript.trim()) {
+        throw new Error('No speech was detected. Please try again.');
+      }
+      return result.transcript.trim();
+    } catch {
+      throw nativeErr instanceof Error ? nativeErr : new Error(String(nativeErr));
+    }
   }
-  return result.transcript.trim();
 }
 
 export async function executeVoiceIntent(transcript: string): Promise<VoiceIntentResponse> {

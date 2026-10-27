@@ -81,8 +81,10 @@ func TestParseIntent_GlobalCommands(t *testing.T) {
 		{"turn off all lights", IntentAllOff},
 		{"everything off", IntentAllOff},
 		{"lights off", IntentAllOff},
+		{"light off", IntentAllOff},
 		{"turn on all lights", IntentAllOn},
 		{"everything on", IntentAllOn},
+		{"light on", IntentAllOn},
 	}
 
 	for _, c := range cases {

@@ -345,7 +345,11 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if parsed.Intent == IntentUnknown {
-		resp.Message = "Could not recognize device command from speech"
+		if parsed.Action != "" {
+			resp.Message = fmt.Sprintf("Action '%s' detected, but no matching device found. Try 'Prism', 'Halo', 'Ember', 'Nova', or 'all lights'.", parsed.Action)
+		} else {
+			resp.Message = "Could not recognize device command from speech"
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}

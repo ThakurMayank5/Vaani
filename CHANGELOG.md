@@ -37,7 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `--convert` CLI flag and `GET /convert` HTTP endpoint in `server.py` for raw PCM to WAV conversion.
 - **Server Guardrails**:
   - Replaced substring matching with whole-token/word matching to prevent false triggers (e.g., *"hall"* or *"call"* triggering `ALL_ON`).
+  - Added support for singular *"light on"* / *"light off"* for room-wide light control.
+  - Added descriptive qualifier guard ensuring unknown lights (e.g., *"laptop light"*, *"kitchen light"*) are safely rejected rather than turning on all lights.
   - Added rhyming collision guards preventing generic word *"light"* from fuzzily matching *"night"* (*Night Light*).
+  - Added contextual feedback when an action (*"ON"* / *"OFF"*) is spoken without a recognized device.
   - Removed high-risk conversational aliases (*"hello"*, *"know"*, *"yellow"*, *"members"*).
 - **Documentation**:
   - Updated root `README.md` with system architecture diagrams, GPIO pin mappings, API references, and testing procedures.

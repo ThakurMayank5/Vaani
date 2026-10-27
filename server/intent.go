@@ -35,9 +35,19 @@ var defaultDeviceAliases = map[int][]string{
 	},
 }
 
+// Tokens permitted in global room-wide phrases without treating them as unknown device qualifiers.
+var globalAllowedTokens = map[string]bool{
+	"turn": true, "switch": true, "power": true, "on": true, "off": true, "out": true,
+	"the": true, "a": true, "an": true, "please": true, "my": true,
+	"can": true, "could": true, "you": true, "would": true, "it": true,
+	"all": true, "every": true, "everything": true, "entire": true, "whole": true,
+	"room": true, "living": true, "house": true, "home": true,
+	"lights": true, "light": true,
+}
+
 // Global scope keywords triggering multi-device operations.
 var globalAllKeywords = []string{
-	"all", "all lights", "all the lights", "everything", "every light", "entire room", "whole room", "lights",
+	"all", "all lights", "all the lights", "everything", "every light", "entire room", "whole room", "lights", "light",
 }
 
 // ParsedIntent represents the structured command extracted from raw transcribed speech.
@@ -187,20 +197,21 @@ func ParseIntent(rawTranscript string, currentDevices []DeviceInfo) ParsedIntent
 
 	action, _, isToggle := DetectAction(clean)
 
-	// Check if this is a global command ("all lights", "everything", "lights off")
+	// Check if this is a global command ("all lights", "everything", "lights off", "light on")
 	isGlobal := false
 	for _, kw := range globalAllKeywords {
 		if hasWholeWordOrPhrase(clean, kw) {
-			if kw == "lights" || kw == "all lights" {
-				hasSpecific := false
-				for _, dev := range currentDevices {
-					prefix := strings.ToLower(Tokenize(dev.Name)[0])
-					if hasWholeWordOrPhrase(clean, prefix) || hasWholeWordOrPhrase(clean, strings.ToLower(dev.CustomWord)) {
-						hasSpecific = true
+			if kw == "lights" || kw == "all lights" || kw == "light" {
+				// Guard: Only treat as global if all tokens in the phrase are generic/scope words.
+				// If there is an unrecognized noun (e.g. "laptop" in "laptop light"), do NOT trigger all lights.
+				hasUnrecognizedQualifier := false
+				for _, tok := range Tokenize(clean) {
+					if !globalAllowedTokens[tok] {
+						hasUnrecognizedQualifier = true
 						break
 					}
 				}
-				if !hasSpecific {
+				if !hasUnrecognizedQualifier {
 					isGlobal = true
 					break
 				}
@@ -301,6 +312,7 @@ func ParseIntent(rawTranscript string, currentDevices []DeviceInfo) ParsedIntent
 	if bestMatch == nil {
 		return ParsedIntent{
 			Intent:     IntentUnknown,
+			Action:     action,
 			Confidence: 0.2,
 			RawText:    rawTranscript,
 		}

@@ -117,10 +117,14 @@ Vaani/
    ```go
    esp32URL = "http://<ESP32-IP>/led"
    ```
-2. Start the server:
+2. Run the automated test suite to verify intent parsing:
    ```bash
    cd server
-   go run main.go
+   go test -v ./...
+   ```
+3. Start the server (compiles `main.go`, `intent.go`, and `fuzzy.go` together):
+   ```bash
+   go run .
    ```
    *By default, the server runs on port `42069` (override using the `PORT` environment variable).*
 
@@ -191,8 +195,37 @@ Verify raw audio streaming from an ESP32 microphone:
   - Body: `{"device": 1, "action": "ON"}` (Actions: `"ON"` | `"OFF"`)
 - **`POST /api/intent`**
   - Parse and execute natural voice commands from transcribed speech using Go + Fuzzy logic.
-  - Body: `{"text": "turn on prism", "execute": true}`
-  - Supports fuzzy matching for speech/ASR mishearings (e.g., *"prison"* $\rightarrow$ *Prism*, *"hello"* $\rightarrow$ *Halo*, *"amber"* $\rightarrow$ *Ember*, *"noah"* $\rightarrow$ *Nova*), global commands (*"lights off"*, *"turn off all lights"*), and individual device names.
+  - Body:
+    ```json
+    {
+      "text": "turn on prism",
+      "execute": true
+    }
+    ```
+  - **Intents Supported**: `TURN_ON`, `TURN_OFF`, `TOGGLE`, `ALL_ON`, `ALL_OFF`, `QUERY_STATUS`.
+  - **Safety & Guardrails**:
+    - Execution is gated by a minimum confidence score ($\ge 0.70$) to prevent accidental triggers.
+    - Word-boundary matching prevents substring false positives (e.g., *"hall"* or *"call"* will not trigger `ALL_ON`).
+    - Rhyming collision guards prevent generic word *"light"* from accidentally targeting *"Night Light"*.
+  - Response:
+    ```json
+    {
+      "success": true,
+      "message": "Parsed intent: TURN_ON (confidence: 1.00)",
+      "intent": {
+        "intent": "TURN_ON",
+        "action": "ON",
+        "deviceIds": [1],
+        "targetName": "Desk Light",
+        "confidence": 1.0,
+        "rawText": "turn on prism"
+      },
+      "executed": true,
+      "results": [
+        {"device": 1, "name": "Desk Light", "gpio": 18, "state": "ON", "success": true}
+      ]
+    }
+    ```
 
 ### ESP32 Direct HTTP Endpoint (`http://<ESP32-IP>:80`)
 

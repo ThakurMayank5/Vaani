@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Hybrid 2-Tier Intent Engine (`server/semantic.go`, `server/main.go`, `test-servers/semantic_server.py`)**:
+  - Implemented a 2-tier decision gateway:
+    - **Tier 1 (Fast-Path):** Pure Go fuzzy engine handles explicit commands (*"prism on"*, *"all lights off"*) in $<1\text{ms}$ with zero memory overhead.
+    - **Tier 2 (Semantic Fallback):** When Tier 1 is unrecognized or confidence $< 0.80$, queries local semantic server (`POST /api/semantic_intent`) to parse indirect or colloquial speech.
+  - **Removed Artificial Inflation**: Eliminated the linear remap formula; switched to raw probability + runner-up margin gating ($\text{raw} \ge 0.45$, $\text{margin} \ge 0.15$).
+  - **Out-of-Scope Device Guard**: Specific unregistered rooms/appliances (*"bathroom light"*, *"kitchen light"*) are safely rejected rather than widening to all lights.
+  - **Confirmation-Before-Action Guard (`requiresConfirmation`)**: Ambient scenes and bedtime routines (*"time for sleep"*, *"it's getting dark"*) return confirmation proposals without executing hardware until verified.
+  - **Interactive Confirmation Handshake**: Added `confirmed: bool` to Go `IntentRequest` (`POST /api/intent`) and interactive `👉 Execute this proposal? [y/N]` prompt in `voice_client.py` to allow safe, confirmed execution.
+  - **Semantic Polarity Cross-Check (`server/semantic.go`)**: Enforced cross-validation preventing positive illumination phrases from triggering `TURN_OFF`.
+  - **Network Security**: Bound `semantic_server.py` strictly to `127.0.0.1`.
+  - **CPU Latency Profiling**: Added live `time.perf_counter()` latency reporting per semantic inference.
+- **Intent Engine Safety & Priority Patches (`server/intent.go`, `server/intent_test.go`)**:
+  - **Candidate Device Priority**: Device matching now executes *before* global room-wide triggers, fixing the critical bug where *"turn on all nigght lights"* erroneously activated all devices instead of Night Light.
+  - **Determiner Guard for Prepositional 'On'/'Off'**: Bare `"on"`/`"off"` is only accepted as an action when it is the trailing word or not followed by determiners (`the`, `a`, `my`, `this`, `that`). Prevents phrases like *"put the book on the desk"* from triggering `ON`.
+  - **Added Action Verbs**: Explicitly mapped `"illuminate"`, `"illumination"`, `"light up"`, and `"brighten"` to `ON` (Conf: 1.00).
+  - **Bedtime Routines**: Added direct `ALL_OFF` routing for smart home sleep triggers (*"time for sleep"*, *"good night"*, *"bedtime"*).
+  - **Calibrated Intent Confidence**: Intent confidence now combines action verb confidence and device match similarity ($\min(\text{actionConf}, \text{deviceConf})$).
+- **Voice Client Microphone Meter & Gain Calibration (`test-servers/voice_client.py`)**:
+  - Raised "Good volume" threshold to $0.12 \le \text{peak} \le 0.85$, adding warning tiers for $<0.03$ (too quiet) and $0.03-0.12$ (low volume).
+  - Upgraded percentile gain scaling to $25.0\times$ cap targeting $0.70$ peak amplitude.
 - **Fuzzy Intent Parser Engine (`server/fuzzy.go`, `server/intent.go`)**:
   - Implemented Levenshtein distance algorithm and sliding $n$-gram scoring in pure Go with zero external dependencies.
   - Added text normalization that strips punctuation, collapses whitespace, and handles rune-safe character conversions.

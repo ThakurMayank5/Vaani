@@ -15,10 +15,17 @@
 flowchart LR
     subgraph Client ["Client Layer"]
         App["📱 Vaani Mobile App\n(React Native / Expo)"]
+        VoiceClient["🎙️ Voice Client & Whisper ASR\n(test-servers/voice_client.py)"]
     end
 
-    subgraph Backend ["Backend Gateway"]
-        Server["🐹 Go Device Server\n(Port :42069)"]
+    subgraph Backend ["Go Gateway (:42069)"]
+        Server["🐹 Device State Manager\n& Intent Router"]
+        Tier1["⚡ Tier 1: Pure Go Fuzzy Matcher\n(< 1ms, 0MB RAM)"]
+        Server --> Tier1
+    end
+
+    subgraph SemanticAI ["Semantic Fallback (:42070)"]
+        Tier2["🧠 Tier 2: Laya Decision Engine\n(convaiinnovations/laya)"]
     end
 
     subgraph Hardware ["Hardware Layer"]
@@ -29,20 +36,15 @@ flowchart LR
         LED4["💡 Night Light (GPIO 22)"]
     end
 
-    subgraph AudioPipeline ["Voice / Audio Pipeline (Experimental)"]
-        PyServer["🐍 Flask Audio Receiver\n(Port :8000)"]
-        RawAudio["🎵 16kHz PCM Audio Stream"]
-    end
-
-    App -- "HTTP REST / JSON" --> Server
+    App -- "REST / JSON" --> Server
+    VoiceClient -- "POST /api/intent" --> Server
+    Tier1 -. "Uncertain / Fallback" .-> Tier2
+    Tier2 -. "Semantic Decision" .-> Server
     Server -- "HTTP / Plain Text POST" --> ESP
     ESP --> LED1
     ESP --> LED2
     ESP --> LED3
     ESP --> LED4
-
-    ESP -. "Raw Audio Stream" .-> PyServer
-    PyServer -. "Convert" .-> RawAudio
 ```
 
 ---
@@ -60,8 +62,10 @@ Vaani/
 │   ├── main.go         # Device state manager & HTTP router
 │   ├── intent.go       # Intent classification & domain resolution
 │   ├── fuzzy.go        # Levenshtein distance & text normalization algorithms
+│   ├── semantic.go     # Hybrid Tier-2 semantic fallback gateway (Laya / SLM)
 │   ├── intent_test.go  # Intent parser unit test suite
-│   └── fuzzy_test.go   # Fuzzy logic unit test suite
+│   ├── fuzzy_test.go   # Fuzzy logic unit test suite
+│   └── semantic_test.go# Semantic fallback unit test suite
 ├── vaani-app/          # Mobile application (Expo / React Native)
 │   ├── src/
 │   │   ├── api/        # API client for Go backend
@@ -70,7 +74,8 @@ Vaani/
 │   └── package.json
 ├── test-servers/       # Audio stream testing utilities
 │   ├── server.py       # Flask server receiving ESP32 PCM chunks & WAV converter
-│   └── voice_client.py # Interactive laptop mic client with Whisper ASR & playback review
+│   ├── voice_client.py # Interactive laptop mic client with Whisper ASR & playback review
+│   └── semantic_server.py # Tier-2 local semantic decision server (Laya / heuristics)
 ├── CHANGELOG.md        # Detailed version history and changes
 └── LICENSE             # MIT License
 ```
@@ -111,22 +116,30 @@ Vaani/
 
 ---
 
-### 2. Run the Go API Server
+### 2. Run the Intent Parsing & Gateway Stack
 
+#### A. (Optional) Start the Tier-2 Semantic Decision Server:
+For parsing complex, colloquial, or ambient speech (*"it's getting dark"*, *"make it brighter"*):
+```bash
+python3 test-servers/semantic_server.py
+```
+*Listens on `http://127.0.0.1:42070` using the local Laya decision model (`convaiinnovations/laya`).*
+
+#### B. Start the Go Backend Gateway:
 1. Update the `esp32URL` in [`server/main.go`](server/main.go) with your ESP32's IP address:
    ```go
    esp32URL = "http://<ESP32-IP>/led"
    ```
-2. Run the automated test suite to verify intent parsing:
+2. Run the automated test suite (verifies fuzzy parsing, device priorities, polarity guards, and semantic fallbacks):
    ```bash
    cd server
    go test -v ./...
    ```
-3. Start the server (compiles `main.go`, `intent.go`, and `fuzzy.go` together):
+3. Start the server:
    ```bash
    go run .
    ```
-   *By default, the server runs on port `42069` (override using the `PORT` environment variable).*
+   *Runs on port `42069` (override using the `PORT` environment variable).*
 
 ---
 
@@ -158,6 +171,7 @@ python test-servers/voice_client.py
   - Press `p` to listen back through your speakers/headphones to verify speech clarity before submitting.
   - Press `s` (or Enter) to transcribe with Whisper and dispatch to the Go intent parser.
   - Press `r` to re-record if background noise interrupted your speech.
+  - Interactive confirmation prompt (`👉 Execute this proposal? [y/N]`) for scene proposals requiring verification.
   - Or process any existing `.wav` file directly: `python test-servers/voice_client.py --file my_sample.wav`.
   - Add `--execute` to trigger real ESP32 GPIO actions, or leave default for dry-run parsing.
 
@@ -194,19 +208,23 @@ Verify raw audio streaming from an ESP32 microphone:
   - Toggle light state directly by device ID.
   - Body: `{"device": 1, "action": "ON"}` (Actions: `"ON"` | `"OFF"`)
 - **`POST /api/intent`**
-  - Parse and execute natural voice commands from transcribed speech using Go + Fuzzy logic.
+  - Parse and execute natural voice commands using the **2-Tier Hybrid Decision Engine**.
   - Body:
     ```json
     {
       "text": "turn on prism",
-      "execute": true
+      "execute": true,
+      "confirmed": false
     }
     ```
   - **Intents Supported**: `TURN_ON`, `TURN_OFF`, `TOGGLE`, `ALL_ON`, `ALL_OFF`, `QUERY_STATUS`.
   - **Safety & Guardrails**:
-    - Execution is gated by a minimum confidence score ($\ge 0.70$) to prevent accidental triggers.
-    - Word-boundary matching prevents substring false positives (e.g., *"hall"* or *"call"* will not trigger `ALL_ON`).
-    - Rhyming collision guards prevent generic word *"light"* from accidentally targeting *"Night Light"*.
+    - **Device Priority**: Individual candidate devices are matched *before* global keywords to prevent false room-wide triggers (e.g. *"turn on all night lights"* resolves to Night Light, not all lights).
+    - **Determiner Guard**: Bare `"on"` / `"off"` requires trailing placement or absence of determiners, avoiding false actions from prepositional phrases (*"put the book on the desk"*).
+    - **Polarity Cross-Check**: Brightening phrases (*"dark"*, *"brighten"*) cannot trigger `TURN_OFF`.
+    - **Out-of-Scope Refusal**: Unregistered devices (*"bathroom light"*, *"kitchen light"*) safely reject rather than widening to all lights.
+    - **Confirmation-Before-Act**: Bedtime scenes (*"time for sleep"*) return `requiresConfirmation: true` and hold execution until `confirmed: true` is supplied.
+    - **Execution Gating**: Refuses execution if combined confidence ($\min(\text{actionConf}, \text{deviceConf})$) $< 0.70$.
   - Response:
     ```json
     {
@@ -218,9 +236,11 @@ Verify raw audio streaming from an ESP32 microphone:
         "deviceIds": [1],
         "targetName": "Desk Light",
         "confidence": 1.0,
-        "rawText": "turn on prism"
+        "rawText": "turn on prism",
+        "requiresConfirmation": false
       },
       "executed": true,
+      "requiresConfirmation": false,
       "results": [
         {"device": 1, "name": "Desk Light", "gpio": 18, "state": "ON", "success": true}
       ]

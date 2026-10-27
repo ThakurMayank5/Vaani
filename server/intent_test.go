@@ -85,6 +85,9 @@ func TestParseIntent_GlobalCommands(t *testing.T) {
 		{"turn on all lights", IntentAllOn},
 		{"everything on", IntentAllOn},
 		{"light on", IntentAllOn},
+		{"time for sleep", IntentAllOff},
+		{"good night", IntentAllOff},
+		{"bedtime", IntentAllOff},
 	}
 
 	for _, c := range cases {
@@ -119,5 +122,33 @@ func TestParseIntent_FalsePositiveRejection(t *testing.T) {
 		if result.Intent != IntentUnknown {
 			t.Errorf("ParseIntent(%q).Intent = %s, Target: %s, MatchedOn: %s; want UNKNOWN (avoid false positive)", input, result.Intent, result.TargetName, result.MatchedOn)
 		}
+	}
+}
+
+func TestParseIntent_DevicePriorityOverGlobal(t *testing.T) {
+	devices := mockDevices()
+
+	// 1. "Turn on all nigght lights" contains "all", but specifically targets Night Light (Device 4)
+	res := ParseIntent("turn on all nigght lights", devices)
+	if res.Intent != IntentTurnOn {
+		t.Errorf("expected IntentTurnOn, got %s", res.Intent)
+	}
+	if len(res.DeviceIDs) != 1 || res.DeviceIDs[0] != 4 {
+		t.Errorf("expected Night Light (Device 4), got %v (Target: %s)", res.DeviceIDs, res.TargetName)
+	}
+
+	// 2. "some illumination on the desk" has illumination as action and desk as device
+	res2 := ParseIntent("some illumination on the desk", devices)
+	if res2.Intent != IntentTurnOn {
+		t.Errorf("expected IntentTurnOn for illumination, got %s", res2.Intent)
+	}
+	if len(res2.DeviceIDs) != 1 || res2.DeviceIDs[0] != 1 {
+		t.Errorf("expected Desk Light (Device 1), got %v (Target: %s)", res2.DeviceIDs, res2.TargetName)
+	}
+
+	// 3. Prepositional bare "on" with determiner ("on the desk") must NOT trigger an action
+	res3 := ParseIntent("put the book on the desk", devices)
+	if res3.Intent != IntentUnknown {
+		t.Errorf("expected IntentUnknown for prepositional 'on the desk', got %s", res3.Intent)
 	}
 }

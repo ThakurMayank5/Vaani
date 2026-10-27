@@ -331,7 +331,20 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parsed := ParseIntent(rawText, listDevices())
+	devices := listDevices()
+	parsed := ParseIntent(rawText, devices)
+
+	// Hybrid Fallback: If deterministic fuzzy matching failed or has marginal confidence,
+	// query the semantic decision engine (e.g. Laya / SLM).
+	if parsed.Intent == IntentUnknown || parsed.Confidence < 0.80 {
+		if semanticParsed, err := QuerySemanticFallback(r.Context(), rawText, devices); err == nil {
+			if semanticParsed.Intent != IntentUnknown && semanticParsed.Confidence >= 0.55 {
+				log.Printf("Fuzzy engine uncertain (intent=%s, conf=%.2f). Semantic fallback succeeded: %s -> %s (conf: %.2f, matched: %s, confirm: %v)",
+					parsed.Intent, parsed.Confidence, rawText, semanticParsed.Intent, semanticParsed.Confidence, semanticParsed.MatchedOn, semanticParsed.RequiresConfirmation)
+				parsed = semanticParsed
+			}
+		}
+	}
 
 	shouldExecute := true
 	if req.Execute != nil {
@@ -339,9 +352,10 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := IntentResponse{
-		Success:  parsed.Intent != IntentUnknown,
-		Intent:   parsed,
-		Executed: false,
+		Success:              parsed.Intent != IntentUnknown,
+		Intent:               parsed,
+		Executed:             false,
+		RequiresConfirmation: parsed.RequiresConfirmation,
 	}
 
 	if parsed.Intent == IntentUnknown {
@@ -357,6 +371,12 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 	if parsed.Confidence < 0.70 {
 		resp.Success = false
 		resp.Message = fmt.Sprintf("Confidence too low (%.2f). Action ignored to prevent false triggers in noisy environment.", parsed.Confidence)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	if parsed.RequiresConfirmation && (req.Confirmed == nil || !*req.Confirmed) {
+		resp.Message = fmt.Sprintf("Confirmation required: %s on %s? Please confirm before executing.", parsed.Action, parsed.TargetName)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}

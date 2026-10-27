@@ -16,7 +16,6 @@ SERVER_URL = "http://localhost:42069/api/intent"
 RECORDING_PATH = Path("test-servers/recorded_cmd.wav")
 
 HOTWORDS = "prism halo ember nova desk reading accent night lights"
-NATURAL_PROMPT = "Turn on the desk light. Turn off prism. Reading light on. Halo off."
 
 
 def record_clean_audio(duration: float = 3.0) -> np.ndarray:
@@ -48,17 +47,22 @@ def record_clean_audio(duration: float = 3.0) -> np.ndarray:
 
     # 2. Robust percentile normalization
     peak = float(np.percentile(np.abs(flat), 99.5))
-    level_bars = min(10, int(peak * 30))
+    level_bars = min(10, int(peak * 25))
     meter = "█" * level_bars + "░" * (10 - level_bars)
 
-    if peak < 0.015:
-        print(f"⚠️  Mic Level: [{meter}] Peak={peak:.3f} (Very quiet! Speak closer to the laptop mic)")
+    if peak < 0.03:
+        print(f"⚠️  Mic Level: [{meter}] Peak={peak:.3f} (Too quiet! Speak closer or type 'm' to choose mic)")
+    elif peak < 0.12:
+        print(f"🔉 Mic Level: [{meter}] Peak={peak:.3f} (Low volume — speak louder for reliable transcription)")
+    elif peak <= 0.85:
+        print(f"🎤 Mic Level: [{meter}] Peak={peak:.3f} (Good volume ✅)")
     else:
-        print(f"🎤 Mic Level: [{meter}] Peak={peak:.3f} (Good volume)")
+        print(f"🔊 Mic Level: [{meter}] Peak={peak:.3f} (Very loud / High gain ⚠️)")
 
-    # 3. Capped gain scaling
-    if peak > 0.008:
-        gain = min(0.70 / peak, 20.0)
+    # 3. Robust percentile gain normalization with capped gain
+    if peak > 0.005:
+        target_peak = 0.70
+        gain = min(target_peak / max(peak, 1e-4), 25.0)
         flat = flat * gain
 
     flat = np.clip(flat, -1.0, 1.0).astype(np.float32)
@@ -79,9 +83,13 @@ def play_audio(audio: np.ndarray):
     print("✅ Playback finished.\n")
 
 
-def send_to_server(text: str, execute: bool = False):
+def send_to_server(text: str, execute: bool = False, confirmed: bool = False):
     """Send transcribed text to the Go intent parser API."""
-    data = json.dumps({"text": text, "execute": execute}).encode("utf-8")
+    payload = {"text": text, "execute": execute}
+    if confirmed:
+        payload["confirmed"] = True
+
+    data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         SERVER_URL,
         data=data,
@@ -111,8 +119,13 @@ def print_intent_response(res: dict):
         print(f"   • Action:     {intent_data.get('action')}")
         print(f"   • Confidence: {intent_data.get('confidence', 0):.2f}")
         print(f"   • Target:     {intent_data.get('targetName')} (IDs: {intent_data.get('deviceIds')})")
+        if intent_data.get("deviceActions"):
+            actions_summary = ", ".join(f"Dev {d}: {a}" for d, a in intent_data.get("deviceActions").items())
+            print(f"   • Per-Device: {actions_summary}")
         print(f"   • Matched On: {intent_data.get('matchedOn')}")
         print(f"   • Executed:   {res.get('executed')}")
+        if res.get("requiresConfirmation") or intent_data.get("requiresConfirmation"):
+            print(f"   ⚠️  CONFIRM:  {res.get('message')}")
         if res.get("results"):
             print("   • Hardware Status:")
             for r in res.get("results"):
@@ -131,7 +144,6 @@ def process_audio_file(model: WhisperModel, audio: np.ndarray, execute: bool):
         audio,
         language="en",
         hotwords=HOTWORDS,
-        initial_prompt=NATURAL_PROMPT,
         beam_size=5,
         temperature=0.0,
         condition_on_previous_text=False,
@@ -162,6 +174,13 @@ def process_audio_file(model: WhisperModel, audio: np.ndarray, execute: bool):
     res = send_to_server(transcript, execute=execute)
     if res:
         print_intent_response(res)
+        if res.get("requiresConfirmation") and execute:
+            ans = input("👉 Execute this proposal? [y/N]: ").strip().lower()
+            if ans in ("y", "yes"):
+                print("🚀 Sending confirmed execution...")
+                res_conf = send_to_server(transcript, execute=True, confirmed=True)
+                if res_conf:
+                    print_intent_response(res_conf)
 
 
 def main():

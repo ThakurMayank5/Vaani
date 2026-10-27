@@ -68,9 +68,9 @@ var defaultDevices = []DeviceInfo{
 }
 
 var (
-	esp32URL  string
-	httpClient *http.Client
-	store      *Store
+	esp32URL     string
+	httpClient   *http.Client
+	store        *Store
 	deviceEvents *DeviceEventHub
 )
 
@@ -418,50 +418,104 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parsed := ParseIntent(text, listDevices())
-	log.Printf("[VoiceIntent] Input: %q | Source: %s | Intent: %s | Action: %s | Target: %s | DeviceIDs: %v | Conf: %.2f | MatchedOn: %s",
-		text, requestSource(r), parsed.Intent, parsed.Action, parsed.TargetName, parsed.DeviceIDs, parsed.Confidence, parsed.MatchedOn)
-	response := IntentResponse{Success: parsed.Intent != IntentUnknown, Intent: parsed}
-	shouldExecute := intentRequest.Execute == nil || *intentRequest.Execute
+	devices := listDevices()
+	parsed := ParseIntent(text, devices)
+
+	// Hybrid Fallback: If deterministic fuzzy matching failed or has marginal confidence,
+	// query the semantic decision engine (e.g. Laya / SLM).
+	if parsed.Intent == IntentUnknown || parsed.Confidence < 0.80 {
+		if semanticParsed, err := QuerySemanticFallback(r.Context(), text, devices); err == nil {
+			if semanticParsed.Intent != IntentUnknown && semanticParsed.Confidence >= 0.55 {
+				log.Printf("Fuzzy engine uncertain (intent=%s, conf=%.2f). Semantic fallback succeeded: %s -> %s (conf: %.2f, matched: %s, confirm: %v)",
+					parsed.Intent, parsed.Confidence, text, semanticParsed.Intent, semanticParsed.Confidence, semanticParsed.MatchedOn, semanticParsed.RequiresConfirmation)
+				parsed = semanticParsed
+			}
+		}
+	}
+
 	source := requestSource(r)
+	log.Printf("[VoiceIntent] Input: %q | Source: %s | Intent: %s | Action: %s | Target: %s | DeviceIDs: %v | Conf: %.2f | MatchedOn: %s",
+		text, source, parsed.Intent, parsed.Action, parsed.TargetName, parsed.DeviceIDs, parsed.Confidence, parsed.MatchedOn)
+
+	shouldExecute := true
+	if intentRequest.Execute != nil {
+		shouldExecute = *intentRequest.Execute
+	}
+
+	response := IntentResponse{
+		Success:              parsed.Intent != IntentUnknown,
+		Intent:               parsed,
+		Executed:             false,
+		RequiresConfirmation: parsed.RequiresConfirmation,
+	}
+
 	defer func() {
 		recordVoiceCommand(source, text, parsed, shouldExecute, response.Executed, response.Message)
 	}()
+
 	if parsed.Intent == IntentUnknown {
-		response.Message = fmt.Sprintf("Could not recognize device command from speech: %q", text)
+		if parsed.Action != "" {
+			response.Message = fmt.Sprintf("Action '%s' detected, but no matching device found. Try 'Prism', 'Halo', 'Ember', 'Nova', or 'all lights'.", parsed.Action)
+		} else {
+			response.Message = fmt.Sprintf("Could not recognize device command from speech: %q", text)
+		}
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
+
 	if parsed.Confidence < 0.70 {
 		response.Success = false
-		response.Message = fmt.Sprintf("Confidence too low (%.2f) for %q. Action ignored.", parsed.Confidence, text)
+		response.Message = fmt.Sprintf("Confidence too low (%.2f) for %q. Action ignored to prevent false triggers in noisy environment.", parsed.Confidence, text)
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
+
+	if parsed.RequiresConfirmation && (intentRequest.Confirmed == nil || !*intentRequest.Confirmed) {
+		response.Message = fmt.Sprintf("Confirmation required: %s on %s? Please confirm before executing.", parsed.Action, parsed.TargetName)
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
 	response.Message = fmt.Sprintf("Parsed intent: %s (confidence: %.2f)", parsed.Intent, parsed.Confidence)
+
 	if !shouldExecute || parsed.Intent == IntentQueryStatus {
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
+	// Dispatch commands across matched devices
 	response.Executed = true
 	response.Results = make([]DeviceExecutionResult, 0, len(parsed.DeviceIDs))
+
 	for _, deviceID := range parsed.DeviceIDs {
 		device, exists, err := store.GetDevice(r.Context(), deviceID)
 		if err != nil || !exists {
 			continue
 		}
+
 		targetAction := parsed.Action
-		if parsed.Intent == IntentToggle {
+		if specificAction, ok := parsed.DeviceActions[deviceID]; ok && specificAction != "" {
+			targetAction = specificAction
+		}
+		if targetAction == "MULTI" {
+			targetAction = "ON"
+		}
+
+		if parsed.Intent == IntentToggle || targetAction == "TOGGLE" {
 			if device.State == "ON" {
 				targetAction = "OFF"
 			} else {
 				targetAction = "ON"
 			}
 		}
+
 		gpio, commandErr := executeESP32Command(r.Context(), deviceID, targetAction, source)
 		result := DeviceExecutionResult{
-			Device: deviceID, Name: device.Name, GPIO: gpio, State: targetAction, Success: commandErr == nil,
+			Device:  deviceID,
+			Name:    device.Name,
+			GPIO:    gpio,
+			State:   targetAction,
+			Success: commandErr == nil,
 		}
 		if commandErr != nil {
 			result.Error = commandErr.Error()
@@ -514,7 +568,7 @@ func main() {
 	deviceEvents = newDeviceEventHub()
 
 	httpClient = &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:       5 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 

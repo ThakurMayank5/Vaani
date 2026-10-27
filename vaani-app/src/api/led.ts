@@ -186,5 +186,9 @@ export async function executeVoiceIntent(transcript: string): Promise<VoiceInten
     headers: { 'Content-Type': 'application/json', 'X-Control-Source': 'voice_app' },
     body: JSON.stringify({ text: transcript, execute: true }),
   });
-  return readJSON<VoiceIntentResponse>(response);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Intent server error (${response.status}): ${errorText}`);
+  }
+  return (await response.json()) as VoiceIntentResponse;
 }

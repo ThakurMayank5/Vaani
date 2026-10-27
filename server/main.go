@@ -419,6 +419,8 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parsed := ParseIntent(text, listDevices())
+	log.Printf("[VoiceIntent] Input: %q | Source: %s | Intent: %s | Action: %s | Target: %s | DeviceIDs: %v | Conf: %.2f | MatchedOn: %s",
+		text, requestSource(r), parsed.Intent, parsed.Action, parsed.TargetName, parsed.DeviceIDs, parsed.Confidence, parsed.MatchedOn)
 	response := IntentResponse{Success: parsed.Intent != IntentUnknown, Intent: parsed}
 	shouldExecute := intentRequest.Execute == nil || *intentRequest.Execute
 	source := requestSource(r)
@@ -426,13 +428,13 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		recordVoiceCommand(source, text, parsed, shouldExecute, response.Executed, response.Message)
 	}()
 	if parsed.Intent == IntentUnknown {
-		response.Message = "Could not recognize device command from speech"
+		response.Message = fmt.Sprintf("Could not recognize device command from speech: %q", text)
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
 	if parsed.Confidence < 0.70 {
 		response.Success = false
-		response.Message = fmt.Sprintf("Confidence too low (%.2f). Action ignored.", parsed.Confidence)
+		response.Message = fmt.Sprintf("Confidence too low (%.2f) for %q. Action ignored.", parsed.Confidence, text)
 		writeJSON(w, http.StatusOK, response)
 		return
 	}

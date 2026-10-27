@@ -23,19 +23,20 @@ const (
 var defaultDeviceAliases = map[int][]string{
 	DeviceDeskLight: {
 		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic",
-		"study lamp", "study light", "light 1", "light one", "device 1", "device one", "one", "first",
+		"film", "plism", "study lamp", "study light", "light 1", "light one", "device 1", "device one",
+		"one", "first", "first light", "1st light",
 	},
 	DeviceReadingLight: {
-		"reading", "read light", "book light", "halo", "helo", "bedside light", "bedside lamp",
-		"light 2", "light two", "device 2", "device two", "two", "second",
+		"reading", "read light", "book light", "halo", "helo", "hello", "hailo", "bedside light", "bedside lamp",
+		"light 2", "light two", "device 2", "device two", "two", "second", "second light", "2nd light",
 	},
 	DeviceAccentLight: {
 		"accent", "ascent light", "ambient light", "ember", "amber", "amber light", "mood light",
-		"light 3", "light three", "device 3", "device three", "three", "third",
+		"light 3", "light three", "device 3", "device three", "three", "third", "third light", "3rd light",
 	},
 	DeviceNightLight: {
 		"night", "nite light", "bed light", "nova", "noah", "nover", "novo", "sleep light",
-		"light 4", "light four", "device 4", "device four", "four", "fourth",
+		"light 4", "light four", "device 4", "device four", "four", "fourth", "fourth light", "4th light",
 	},
 }
 

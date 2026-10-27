@@ -285,32 +285,48 @@ export default function HomeScreen() {
           </View>
 
           {/* Transcript & Intent Result Banner */}
-          {lastTranscript && lastIntentResult ? (
+          {lastTranscript ? (
             <View style={[styles.resultBox, { backgroundColor: colors.backgroundSelected }]}>
               <View style={styles.resultRow}>
-                <Text style={[styles.resultLabel, { color: colors.textSecondary }]}>TRANSCRIPT:</Text>
+                <Text style={[styles.resultLabel, { color: colors.textSecondary }]}>HEARD:</Text>
                 <Text style={[styles.resultValue, { color: colors.text }]}>“{lastTranscript}”</Text>
               </View>
-              <View style={styles.resultRow}>
-                <Text style={[styles.resultLabel, { color: colors.textSecondary }]}>INTENT:</Text>
-                <Text
-                  style={[
-                    styles.resultBadge,
-                    {
-                      color: lastIntentResult.success ? '#24a148' : '#d12727',
-                    },
-                  ]}>
-                  {lastIntentResult.intent?.intent ?? 'UNKNOWN'} ({Math.round((lastIntentResult.intent?.confidence ?? 0) * 100)}% match)
-                </Text>
-              </View>
-              {lastIntentResult.results && lastIntentResult.results.length > 0 ? (
-                <View style={styles.resultsList}>
-                  {lastIntentResult.results.map((r) => (
-                    <Text key={r.device} style={[styles.deviceOutcome, { color: r.success ? '#24a148' : '#d12727' }]}>
-                      {r.success ? '✓' : '✗'} {r.name}: {r.state} {r.error ? `(${r.error})` : ''}
+              {lastIntentResult ? (
+                <>
+                  <View style={styles.resultRow}>
+                    <Text style={[styles.resultLabel, { color: colors.textSecondary }]}>INTENT:</Text>
+                    <Text
+                      style={[
+                        styles.resultBadge,
+                        {
+                          color: lastIntentResult.success ? '#24a148' : '#d12727',
+                        },
+                      ]}>
+                      {lastIntentResult.intent?.intent ?? 'UNKNOWN'}
+                      {lastIntentResult.intent?.confidence
+                        ? ` (${Math.round(lastIntentResult.intent.confidence * 100)}% match)`
+                        : ''}
                     </Text>
-                  ))}
-                </View>
+                  </View>
+                  <Text
+                    style={{
+                      color: lastIntentResult.success ? '#24a148' : '#d12727',
+                      fontSize: 13,
+                      marginTop: 4,
+                      fontWeight: '500',
+                    }}>
+                    {lastIntentResult.message}
+                  </Text>
+                  {lastIntentResult.results && lastIntentResult.results.length > 0 ? (
+                    <View style={styles.resultsList}>
+                      {lastIntentResult.results.map((r) => (
+                        <Text key={r.device} style={[styles.deviceOutcome, { color: r.success ? '#24a148' : '#d12727' }]}>
+                          {r.success ? '✓' : '✗'} {r.name}: {r.state} {r.error ? `(${r.error})` : ''}
+                        </Text>
+                      ))}
+                    </View>
+                  ) : null}
+                </>
               ) : null}
             </View>
           ) : null}

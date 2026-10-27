@@ -58,6 +58,26 @@ def health() -> dict[str, object]:
     }
 
 
+VAANI_DOMAIN_PROMPT = (
+    "Vaani smart home. Control devices: Prism, Halo, Ember, Nova, "
+    "Desk Light, Reading Light, Accent Light, Night Light. "
+    "Commands: Turn on, turn off, switch on, switch off, lights on, lights off, "
+    "all lights on, all lights off, band karo, chalu karo."
+)
+
+WHISPER_HALLUCINATIONS = {
+    "thank you",
+    "thank you.",
+    "thank you very much",
+    "thank you very much.",
+    "thanks for watching",
+    "thanks for watching.",
+    "bye",
+    "bye.",
+    "you",
+}
+
+
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)) -> dict[str, object]:
     if not audio.filename:
@@ -81,10 +101,18 @@ async def transcribe(audio: UploadFile = File(...)) -> dict[str, object]:
             segments, info = get_model().transcribe(
                 temporary_path,
                 language="en",
+                initial_prompt=VAANI_DOMAIN_PROMPT,
                 vad_filter=True,
                 beam_size=3,
             )
             transcript = " ".join(segment.text.strip() for segment in segments).strip()
+
+        # Suppress common Whisper silence hallucinations
+        if transcript.lower().strip() in WHISPER_HALLUCINATIONS:
+            print(f"[ASR] Filtered silence hallucination: '{transcript}'", flush=True)
+            transcript = ""
+
+        print(f"[ASR] Transcribed ({info.language}, prob={info.language_probability:.2f}): '{transcript}'", flush=True)
 
         return {
             "success": True,

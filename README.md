@@ -55,9 +55,13 @@ Vaani/
 │   ├── src/
 │   │   └── main.cpp    # Wi-Fi setup, WebServer on port 80, GPIO toggling
 │   └── platformio.ini  # PlatformIO configuration for NodeMCU-32S
-├── server/             # Go REST API gateway
+├── server/             # Go REST API gateway & intent parser
 │   ├── go.mod
-│   └── main.go         # Device state manager & ESP32 HTTP client
+│   ├── main.go         # Device state manager & HTTP router
+│   ├── intent.go       # Intent classification & domain resolution
+│   ├── fuzzy.go        # Levenshtein distance & text normalization algorithms
+│   ├── intent_test.go  # Intent parser unit test suite
+│   └── fuzzy_test.go   # Fuzzy logic unit test suite
 ├── vaani-app/          # Mobile application (Expo / React Native)
 │   ├── src/
 │   │   ├── api/        # API client for Go backend
@@ -65,8 +69,9 @@ Vaani/
 │   │   └── constants/  # Theme & UI styling tokens
 │   └── package.json
 ├── test-servers/       # Audio stream testing utilities
-│   ├── server.py       # Flask server capturing raw 16-bit PCM chunks
-│   └── convert.py      # WAV converter script (16kHz mono)
+│   ├── server.py       # Flask server receiving ESP32 PCM chunks & WAV converter
+│   └── voice_client.py # Interactive laptop mic client with Whisper ASR & playback review
+├── CHANGELOG.md        # Detailed version history and changes
 └── LICENSE             # MIT License
 ```
 
@@ -137,10 +142,23 @@ Vaani/
 
 ---
 
-### 4. Voice / Audio Stream Testing (Optional)
+### 4. Voice Testing with Laptop Mic or ESP32 Audio
 
-The `test-servers/` directory contains tools to verify microphone streaming from the ESP32:
+#### A. Interactive Mic Voice Client (Record $\rightarrow$ Review/Playback $\rightarrow$ Whisper $\rightarrow$ Go Server):
+Test spoken commands directly using your laptop microphone with audio review:
+```bash
+python test-servers/voice_client.py
+```
+* **Features:**
+  - Automatically saves each recording to `test-servers/recorded_cmd.wav`.
+  - Press `p` to listen back through your speakers/headphones to verify speech clarity before submitting.
+  - Press `s` (or Enter) to transcribe with Whisper and dispatch to the Go intent parser.
+  - Press `r` to re-record if background noise interrupted your speech.
+  - Or process any existing `.wav` file directly: `python test-servers/voice_client.py --file my_sample.wav`.
+  - Add `--execute` to trigger real ESP32 GPIO actions, or leave default for dry-run parsing.
 
+#### B. ESP32 Audio Streaming (Raw PCM Capture & Conversion):
+Verify raw audio streaming from an ESP32 microphone:
 1. **Start the audio receiver:**
    ```bash
    cd test-servers
@@ -148,8 +166,9 @@ The `test-servers/` directory contains tools to verify microphone streaming from
    ```
 2. **Convert recorded raw PCM to WAV:**
    ```bash
-   python convert.py
+   python server.py --convert
    ```
+   *(Or query `GET http://<IP>:8000/convert` while the server is running).*  
    *Output*: `test-servers/audio.wav` (16kHz, 16-bit signed PCM, Mono).
 
 ---
@@ -168,8 +187,12 @@ The `test-servers/` directory contains tools to verify microphone streaming from
   - Rename a device.
   - Body: `{"name": "New Device Name"}`
 - **`POST /api/led`**
-  - Toggle light state.
+  - Toggle light state directly by device ID.
   - Body: `{"device": 1, "action": "ON"}` (Actions: `"ON"` | `"OFF"`)
+- **`POST /api/intent`**
+  - Parse and execute natural voice commands from transcribed speech using Go + Fuzzy logic.
+  - Body: `{"text": "turn on prism", "execute": true}`
+  - Supports fuzzy matching for speech/ASR mishearings (e.g., *"prison"* $\rightarrow$ *Prism*, *"hello"* $\rightarrow$ *Halo*, *"amber"* $\rightarrow$ *Ember*, *"noah"* $\rightarrow$ *Nova*), global commands (*"lights off"*, *"turn off all lights"*), and individual device names.
 
 ### ESP32 Direct HTTP Endpoint (`http://<ESP32-IP>:80`)
 

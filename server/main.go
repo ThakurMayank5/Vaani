@@ -399,7 +399,14 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		targetAction := parsed.Action
-		if parsed.Intent == IntentToggle {
+		if specificAction, ok := parsed.DeviceActions[deviceID]; ok && specificAction != "" {
+			targetAction = specificAction
+		}
+		if targetAction == "MULTI" {
+			targetAction = "ON"
+		}
+
+		if parsed.Intent == IntentToggle || targetAction == "TOGGLE" {
 			if dev.State == "ON" {
 				targetAction = "OFF"
 			} else {

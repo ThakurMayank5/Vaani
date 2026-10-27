@@ -189,6 +189,58 @@ def resolve_semantic_intent(text: str, devices: list) -> dict:
                     "latencyMs": latency_ms,
                 }
 
+            # Multi-device detection in utterance (e.g. "turn on ember and halo", "turn off ember turn on halo")
+            multi_matched = []
+            for d in devices:
+                cw = d.get("custom_word", "").lower()
+                name = d.get("name", "").lower()
+                idx_cw = lower_text.find(cw) if cw else -1
+                idx_name = lower_text.find(name) if name else -1
+                idx = idx_cw if idx_cw != -1 else idx_name
+                if idx != -1:
+                    multi_matched.append((idx, d))
+
+            if len(multi_matched) > 1 and is_intent_valid:
+                multi_matched.sort(key=lambda x: x[0])
+                ordered_devices = [m[1] for m in multi_matched]
+
+                # Check per-device actions based on local text windows
+                device_actions = {}
+                for i, (pos, d) in enumerate(multi_matched):
+                    prev_pos = 0 if i == 0 else multi_matched[i-1][0]
+                    next_pos = len(lower_text) if i == len(multi_matched) - 1 else multi_matched[i+1][0]
+                    window = lower_text[prev_pos:next_pos]
+                    if any(w in window for w in ("turn off", "switch off", "power off", "term of", "term off", "tern off", "turn of", "off", "extinguish", "darken")):
+                        device_actions[d["device"]] = "OFF"
+                    elif any(w in window for w in ("turn on", "switch on", "power on", "term on", "on", "illuminate", "brighten")):
+                        device_actions[d["device"]] = "ON"
+                    else:
+                        device_actions[d["device"]] = "ON" if selected_intent in ("ALL_ON", "TURN_ON") else "OFF"
+
+                unique_acts = set(device_actions.values())
+                if len(unique_acts) > 1:
+                    resolved_intent = "MULTI_ACTION"
+                    action = "MULTI"
+                    targets_summary = ", ".join(f"{d['name']} ({device_actions[d['device']]})" for d in ordered_devices)
+                else:
+                    action = list(unique_acts)[0]
+                    resolved_intent = "TURN_ON" if action == "ON" else ("TURN_OFF" if action == "OFF" else "QUERY_STATUS")
+                    targets_summary = ", ".join(d["name"] for d in ordered_devices)
+
+                return {
+                    "success": True,
+                    "intent": resolved_intent,
+                    "action": action,
+                    "deviceIds": [d["device"] for d in ordered_devices],
+                    "deviceActions": device_actions,
+                    "targetName": targets_summary,
+                    "confidence": round(intent_raw_conf, 2),
+                    "matchedOn": f"semantic:multi({', '.join(d.get('custom_word') or d.get('name') for d in ordered_devices)}) [raw={intent_raw_conf:.2f}]",
+                    "model": "laya",
+                    "requiresConfirmation": False,
+                    "latencyMs": latency_ms,
+                }
+
             # Map target device
             matched_dev = None
             for d in devices:

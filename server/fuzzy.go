@@ -115,34 +115,25 @@ func ExtractNGrams(tokens []string, n int) []string {
 	return result
 }
 
-// BestFuzzyMatch scans 1-gram, 2-gram, and 3-gram substrings of text
-// against a target string and returns the highest similarity score and matched span.
-func BestFuzzyMatch(text, target string) (float64, string) {
+// BestFuzzyMatchSpan scans 1-gram, 2-gram, and 3-gram substrings of tokens
+// against a target string and returns the highest similarity score, matched span,
+// and token boundaries [startTok, endTok).
+func BestFuzzyMatchSpan(tokens []string, target string) (float64, string, int, int) {
 	normTarget := NormalizeText(target)
-	if normTarget == "" {
-		return 0.0, ""
-	}
-
-	normText := NormalizeText(text)
-	if normText == "" {
-		return 0.0, ""
-	}
-
-	// Exact substring check gives an immediate perfect match
-	if strings.Contains(normText, normTarget) {
-		return 1.0, normTarget
-	}
-
-	tokens := Tokenize(normText)
-	if len(tokens) == 0 {
-		return 0.0, ""
+	if normTarget == "" || len(tokens) == 0 {
+		return 0.0, "", -1, -1
 	}
 
 	targetWords := Tokenize(normTarget)
 	targetWordCount := len(targetWords)
+	if targetWordCount == 0 {
+		return 0.0, "", -1, -1
+	}
 
 	bestScore := 0.0
 	bestSpan := ""
+	bestStart := -1
+	bestEnd := -1
 
 	minN := targetWordCount - 1
 	if minN < 1 {
@@ -154,15 +145,28 @@ func BestFuzzyMatch(text, target string) (float64, string) {
 	}
 
 	for n := minN; n <= maxN; n++ {
-		ngrams := ExtractNGrams(tokens, n)
-		for _, gram := range ngrams {
+		if n > len(tokens) {
+			continue
+		}
+		for i := 0; i <= len(tokens)-n; i++ {
+			gram := strings.Join(tokens[i:i+n], " ")
 			score := Similarity(gram, normTarget)
-			if score > bestScore {
+			if score > bestScore || (score == bestScore && score > 0 && n > (bestEnd-bestStart)) {
 				bestScore = score
 				bestSpan = gram
+				bestStart = i
+				bestEnd = i + n
 			}
 		}
 	}
 
-	return bestScore, bestSpan
+	return bestScore, bestSpan, bestStart, bestEnd
+}
+
+// BestFuzzyMatch scans 1-gram, 2-gram, and 3-gram substrings of text
+// against a target string and returns the highest similarity score and matched span.
+func BestFuzzyMatch(text, target string) (float64, string) {
+	tokens := Tokenize(NormalizeText(text))
+	score, span, _, _ := BestFuzzyMatchSpan(tokens, target)
+	return score, span
 }

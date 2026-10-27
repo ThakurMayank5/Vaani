@@ -217,7 +217,10 @@ Verify raw audio streaming from an ESP32 microphone:
       "confirmed": false
     }
     ```
-  - **Intents Supported**: `TURN_ON`, `TURN_OFF`, `TOGGLE`, `ALL_ON`, `ALL_OFF`, `QUERY_STATUS`.
+  - **Intents Supported**: `TURN_ON`, `TURN_OFF`, `TOGGLE`, `ALL_ON`, `ALL_OFF`, `QUERY_STATUS`, `MULTI_ACTION`.
+  - **Multi-Device & Compound Commands**:
+    - **Uniform Multi-Device**: Commands like *"turn on ember and halo"* turn ON all specified devices in a single request.
+    - **Opposing Compound Actions**: Commands with opposing actions (e.g. *"turn off ember turn on halo"* or *"ember off halo on"*) resolve as `MULTI_ACTION` (`Action: "MULTI"`), mapping specific individual actions per device via `deviceActions: {"3": "OFF", "2": "ON"}` and dispatching them accordingly to the ESP32.
   - **Safety & Guardrails**:
     - **Device Priority**: Individual candidate devices are matched *before* global keywords to prevent false room-wide triggers (e.g. *"turn on all night lights"* resolves to Night Light, not all lights).
     - **Determiner Guard**: Bare `"on"` / `"off"` requires trailing placement or absence of determiners, avoiding false actions from prepositional phrases (*"put the book on the desk"*).

@@ -39,17 +39,18 @@ type SemanticIntentPayload struct {
 
 // SemanticIntentResult is returned by the fallback semantic engine.
 type SemanticIntentResult struct {
-	Success              bool    `json:"success"`
-	Intent               string  `json:"intent"` // "TURN_ON", "TURN_OFF", etc.
-	Action               string  `json:"action,omitempty"`
-	DeviceIDs            []int   `json:"deviceIds"`
-	TargetName           string  `json:"targetName,omitempty"`
-	Confidence           float64 `json:"confidence"`
-	MatchedOn            string  `json:"matchedOn,omitempty"`
-	Model                string  `json:"model,omitempty"`
-	Message              string  `json:"message,omitempty"`
-	RequiresConfirmation bool    `json:"requiresConfirmation"`
-	LatencyMs            float64 `json:"latencyMs,omitempty"`
+	Success              bool              `json:"success"`
+	Intent               string            `json:"intent"` // "TURN_ON", "TURN_OFF", etc.
+	Action               string            `json:"action,omitempty"`
+	DeviceIDs            []int             `json:"deviceIds"`
+	DeviceActions        map[int]string    `json:"deviceActions,omitempty"`
+	TargetName           string            `json:"targetName,omitempty"`
+	Confidence           float64           `json:"confidence"`
+	MatchedOn            string            `json:"matchedOn,omitempty"`
+	Model                string            `json:"model,omitempty"`
+	Message              string            `json:"message,omitempty"`
+	RequiresConfirmation bool              `json:"requiresConfirmation"`
+	LatencyMs            float64           `json:"latencyMs,omitempty"`
 }
 
 // QuerySemanticFallback reaches out to the semantic decision engine (e.g. Laya / SLM)
@@ -125,6 +126,7 @@ func QuerySemanticFallback(ctx context.Context, rawText string, devices []Device
 		Intent:               IntentType(result.Intent),
 		Action:               result.Action,
 		DeviceIDs:            result.DeviceIDs,
+		DeviceActions:        result.DeviceActions,
 		TargetName:           result.TargetName,
 		Confidence:           result.Confidence,
 		RawText:              rawText,

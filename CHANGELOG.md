@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multi-Device & Compound Intent Engine (`server/intent.go`, `server/fuzzy.go`, `server/main.go`, `server/intent_test.go`, `test-servers/semantic_server.py`)**:
+  - **Opposing & Multi-Device Actions**: Upgraded the intent engine to support compound multi-device commands containing distinct or opposing actions in a single utterance (e.g., *"turn off ember turn on halo"* or *"ember off halo on"*).
+  - **ASR Phonetic Action Resilience (`server/intent.go`)**: Added phonetic aliases (`"term of"`, `"term off"`, `"tern off"`, `"tern of"`, `"turn of"`, `"terms of"`, `"tune off"`, `"tone off"`) and a fuzzy 2-gram action fallback to [`DetectAction`](file:///c:/Codes/Vaani/server/intent.go#L153) ensuring Whisper transcription slips like *"term of nova"* reliably resolve to `OFF`.
+  - **Whisper Raw Acoustic Mode (`test-servers/voice_client.py`)**: Removed synthetic `initial_prompt` conditioning, enabling pure, unconstrained acoustic speech decoding and avoiding decoder hallucination loops.
+  - **Clause Window & Token Span Tracking (`server/fuzzy.go`)**: Added `BestFuzzyMatchSpan` tracking exact `[startTok, endTok)` token boundaries for matched devices.
+  - **Per-Device Action Scoping & Propagation**:
+    - **Prefix actions**: Evaluates leading verbs before the device (*"turn off ember"* $\rightarrow$ `Ember: OFF`).
+    - **Inter-device mid-slices**: Accurately splits tokens between consecutive devices into trailing postfix states for the preceding device and prefix verbs for the succeeding device (*"ember off turn on halo"* $\rightarrow$ `Ember: OFF`, `Halo: ON`).
+    - **Trailing states & Conjunctions**: Evaluates trailing postfix actions (*"ember and halo off"* $\rightarrow$ both `OFF` via backward propagation; *"turn on ember and halo"* $\rightarrow$ both `ON` via forward propagation).
+  - **`MULTI_ACTION` Intent Type**: Added `IntentMulti IntentType = "MULTI_ACTION"`, `Action = "MULTI"`, and `DeviceActions map[int]string` mapping each device ID to its specific target state.
+  - **Per-Device Hardware Dispatch (`server/main.go`)**: Updated execution loop to inspect `parsed.DeviceActions[deviceID]` so each targeted light receives its individual state command on ESP32 hardware.
+  - **Comprehensive Unit Testing**: Added 7 comprehensive test scenarios in `server/intent_test.go` covering opposing prefix verbs, postfix states, mixed conjunctions, backward/forward action propagation, and alternating 3-device actions.
+  - **Voice Client Per-Device Formatting (`test-servers/voice_client.py`)**: Added dedicated display line formatting `Dev <id>: <ACTION>` when compound device actions are present.
 - **Hybrid 2-Tier Intent Engine (`server/semantic.go`, `server/main.go`, `test-servers/semantic_server.py`)**:
   - Implemented a 2-tier decision gateway:
     - **Tier 1 (Fast-Path):** Pure Go fuzzy engine handles explicit commands (*"prism on"*, *"all lights off"*) in $<1\text{ms}$ with zero memory overhead.

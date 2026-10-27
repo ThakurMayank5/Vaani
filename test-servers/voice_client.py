@@ -16,7 +16,6 @@ SERVER_URL = "http://localhost:42069/api/intent"
 RECORDING_PATH = Path("test-servers/recorded_cmd.wav")
 
 HOTWORDS = "prism halo ember nova desk reading accent night lights"
-NATURAL_PROMPT = "Turn on the desk light. Turn off prism. Reading light on. Halo off."
 
 
 def record_clean_audio(duration: float = 3.0) -> np.ndarray:
@@ -120,6 +119,9 @@ def print_intent_response(res: dict):
         print(f"   • Action:     {intent_data.get('action')}")
         print(f"   • Confidence: {intent_data.get('confidence', 0):.2f}")
         print(f"   • Target:     {intent_data.get('targetName')} (IDs: {intent_data.get('deviceIds')})")
+        if intent_data.get("deviceActions"):
+            actions_summary = ", ".join(f"Dev {d}: {a}" for d, a in intent_data.get("deviceActions").items())
+            print(f"   • Per-Device: {actions_summary}")
         print(f"   • Matched On: {intent_data.get('matchedOn')}")
         print(f"   • Executed:   {res.get('executed')}")
         if res.get("requiresConfirmation") or intent_data.get("requiresConfirmation"):
@@ -142,7 +144,6 @@ def process_audio_file(model: WhisperModel, audio: np.ndarray, execute: bool):
         audio,
         language="en",
         hotwords=HOTWORDS,
-        initial_prompt=NATURAL_PROMPT,
         beam_size=5,
         temperature=0.0,
         condition_on_previous_text=False,

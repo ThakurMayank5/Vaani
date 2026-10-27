@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 
-import { getDevice, renameDevice, type Device } from '@/api/led';
+import { getDevice, renameDevice, type Device, type DeviceEvent } from '@/api/led';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useDeviceEvents } from '@/hooks/use-device-events';
 
 export default function DeviceDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -16,8 +17,10 @@ export default function DeviceDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastServerName = useRef('');
 
   useEffect(() => {
+    let disposed = false;
     const loadDevice = async () => {
       const deviceID = Number(id);
       if (!Number.isInteger(deviceID)) {
@@ -27,16 +30,49 @@ export default function DeviceDetailsScreen() {
       }
       try {
         const result = await getDevice(deviceID);
-        setDevice(result);
-        setName(result.name);
+        if (!disposed) {
+          setDevice(result);
+          setName((currentName) => {
+            if (currentName === '' || currentName === lastServerName.current) {
+              lastServerName.current = result.name;
+              return result.name;
+            }
+            return currentName;
+          });
+        }
       } catch (requestError) {
-        setError(requestError instanceof Error ? requestError.message : 'Could not load device');
+        if (!disposed) {
+          setError(requestError instanceof Error ? requestError.message : 'Could not load device');
+        }
       } finally {
-        setLoading(false);
+        if (!disposed) {
+          setLoading(false);
+        }
       }
     };
     void loadDevice();
+    const refreshInterval = setInterval(() => void loadDevice(), 2000);
+    return () => {
+      disposed = true;
+      clearInterval(refreshInterval);
+    };
   }, [id]);
+
+  useDeviceEvents((event: DeviceEvent) => {
+    const updatedDevice = event.type === 'device.updated'
+      ? event.device
+      : event.devices.find((candidate) => candidate.device === Number(id));
+    if (!updatedDevice || updatedDevice.device !== Number(id)) return;
+
+    setDevice(updatedDevice);
+    setName((currentName) => {
+      if (currentName === '' || currentName === lastServerName.current) {
+        lastServerName.current = updatedDevice.name;
+        return updatedDevice.name;
+      }
+      return currentName;
+    });
+  });
 
   const saveName = async () => {
     if (!device) return;
@@ -46,6 +82,7 @@ export default function DeviceDetailsScreen() {
       const result = await renameDevice(device.device, name);
       setDevice(result);
       setName(result.name);
+      lastServerName.current = result.name;
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save device name');
     } finally {

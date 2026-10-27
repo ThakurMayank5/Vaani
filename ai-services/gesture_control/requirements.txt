@@ -1,0 +1,5 @@
+numpy>=1.26,<3
+opencv-python>=4.10,<5
+onnxruntime>=1.19,<2
+requests>=2.32,<3
+ultralytics>=8.3,<9

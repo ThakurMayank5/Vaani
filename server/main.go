@@ -12,11 +12,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-// Device IDs are the stable values used by the app and the ESP32.
+// Device IDs are the stable values shared by the app, Go server, and ESP32.
 const (
 	DeviceDeskLight    = 1
 	DeviceReadingLight = 2
@@ -30,11 +29,13 @@ type LEDCommand struct {
 }
 
 type DeviceInfo struct {
-	Device     int    `json:"device"`
-	Name       string `json:"name"`
-	CustomWord string `json:"customWord"`
-	GPIO       int    `json:"gpio"`
-	State      string `json:"state"`
+	Device          int    `json:"device"`
+	Name            string `json:"name"`
+	CustomWord      string `json:"customWord"`
+	GPIO            int    `json:"gpio"`
+	State           string `json:"state"`
+	UpdatedAtUTC    string `json:"updatedAtUtc"`
+	UpdatedAtUnixMS int64  `json:"updatedAtUnixMs"`
 }
 
 type RenameDeviceRequest struct {
@@ -59,47 +60,18 @@ type DeviceResponse struct {
 	Device  DeviceInfo `json:"device"`
 }
 
-var (
-	esp32URL   string
-	httpClient *http.Client
+var defaultDevices = []DeviceInfo{
+	{Device: DeviceDeskLight, Name: "Desk Light", CustomWord: "Prism", GPIO: 18, State: "OFF"},
+	{Device: DeviceReadingLight, Name: "Reading Light", CustomWord: "Halo", GPIO: 19, State: "OFF"},
+	{Device: DeviceAccentLight, Name: "Accent Light", CustomWord: "Ember", GPIO: 21, State: "OFF"},
+	{Device: DeviceNightLight, Name: "Night Light", CustomWord: "Nova", GPIO: 22, State: "OFF"},
+}
 
-	devicesMu sync.RWMutex
-	devices   = map[int]DeviceInfo{
-		DeviceDeskLight: {
-			Device:     DeviceDeskLight,
-			Name:       "Desk Light",
-			CustomWord: "Prism",
-			GPIO:       18,
-			State:      "OFF",
-		},
-		DeviceReadingLight: {
-			Device:     DeviceReadingLight,
-			Name:       "Reading Light",
-			CustomWord: "Halo",
-			GPIO:       19,
-			State:      "OFF",
-		},
-		DeviceAccentLight: {
-			Device:     DeviceAccentLight,
-			Name:       "Accent Light",
-			CustomWord: "Ember",
-			GPIO:       21,
-			State:      "OFF",
-		},
-		DeviceNightLight: {
-			Device:     DeviceNightLight,
-			Name:       "Night Light",
-			CustomWord: "Nova",
-			GPIO:       22,
-			State:      "OFF",
-		},
-	}
-	deviceOrder = []int{
-		DeviceDeskLight,
-		DeviceReadingLight,
-		DeviceAccentLight,
-		DeviceNightLight,
-	}
+var (
+	esp32URL     string
+	httpClient   *http.Client
+	store        *Store
+	deviceEvents *DeviceEventHub
 )
 
 func writeJSON(w http.ResponseWriter, status int, response any) {
@@ -108,45 +80,117 @@ func writeJSON(w http.ResponseWriter, status int, response any) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func getDevice(deviceID int) (DeviceInfo, bool) {
-	devicesMu.RLock()
-	defer devicesMu.RUnlock()
-	device, exists := devices[deviceID]
-	return device, exists
+func requestSource(r *http.Request) string {
+	source := strings.TrimSpace(r.Header.Get("X-Control-Source"))
+	if source == "" {
+		return "api"
+	}
+	if len(source) > 100 {
+		return source[:100]
+	}
+	return source
+}
+
+func recordAction(record ControlActionRecord) {
+	if err := store.RecordControlAction(context.Background(), record); err != nil {
+		log.Printf("Could not save control action history: %v", err)
+	}
+}
+
+func recordVoiceCommand(source, transcript string, parsed ParsedIntent, executeRequested, executed bool, outcome string) {
+	if err := store.RecordVoiceCommand(context.Background(), VoiceCommandRecord{
+		Source: source, Transcript: transcript, Intent: string(parsed.Intent), Confidence: parsed.Confidence,
+		ExecuteRequested: executeRequested, Executed: executed, Outcome: outcome, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		log.Printf("Could not save voice command history: %v", err)
+	}
 }
 
 func listDevices() []DeviceInfo {
-	devicesMu.RLock()
-	defer devicesMu.RUnlock()
-
-	result := make([]DeviceInfo, 0, len(deviceOrder))
-	for _, deviceID := range deviceOrder {
-		result = append(result, devices[deviceID])
+	devices, err := store.ListDevices(context.Background())
+	if err != nil {
+		log.Printf("Could not list devices for intent parsing: %v", err)
+		return nil
 	}
-	return result
+	return devices
 }
 
-func setDeviceState(deviceID int, state string) {
-	devicesMu.Lock()
-	defer devicesMu.Unlock()
-	device := devices[deviceID]
-	device.State = state
-	devices[deviceID] = device
+// executeESP32Command is used by the voice-intent path. It shares the same
+// database updates and action history format as the public LED endpoint.
+func executeESP32Command(ctx context.Context, deviceID int, action, source string) (int, error) {
+	device, exists, err := store.GetDevice(ctx, deviceID)
+	if err != nil {
+		return 0, fmt.Errorf("load device: %w", err)
+	}
+	if !exists {
+		return 0, fmt.Errorf("device %d not found", deviceID)
+	}
+	action = strings.ToUpper(strings.TrimSpace(action))
+	if action != "ON" && action != "OFF" {
+		return 0, fmt.Errorf("invalid action: %s", action)
+	}
+
+	startedAt := time.Now().UTC()
+	record := ControlActionRecord{
+		ActionType: "DEVICE_COMMAND", Source: source, DeviceID: &deviceID,
+		RequestedAction: action, PreviousState: device.State, ResultingState: device.State,
+		Success: false, HTTPStatus: http.StatusBadGateway, Message: "Command did not complete", StartedAt: startedAt,
+	}
+	defer func() {
+		record.CompletedAt = time.Now().UTC()
+		recordAction(record)
+	}()
+
+	espBody := fmt.Sprintf("device:%d\naction:%s\n", deviceID, action)
+	requestContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, esp32URL, bytes.NewBufferString(espBody))
+	if err != nil {
+		record.HTTPStatus = http.StatusInternalServerError
+		record.Message = "Could not create ESP32 request"
+		return 0, fmt.Errorf("%s: %w", record.Message, err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		record.Message = "Could not reach ESP32"
+		return 0, fmt.Errorf("%s: %w", record.Message, err)
+	}
+	defer resp.Body.Close()
+	record.ESPHTTPStatus = &resp.StatusCode
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+	if err != nil || len(body) > 4096 {
+		record.Message = "Could not read a valid ESP32 response"
+		return 0, fmt.Errorf("%s", record.Message)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		record.Message = "ESP32 rejected the command"
+		return 0, fmt.Errorf("%s: HTTP %d", record.Message, resp.StatusCode)
+	}
+	updatedDevice, err := store.SetDeviceState(ctx, deviceID, action)
+	if err != nil {
+		record.HTTPStatus = http.StatusInternalServerError
+		record.Message = "ESP32 accepted the command but the device state could not be saved"
+		return 0, fmt.Errorf("%s: %w", record.Message, err)
+	}
+	record.Success = true
+	record.HTTPStatus = http.StatusOK
+	record.ResultingState = updatedDevice.State
+	record.Message = "Device command executed successfully"
+	deviceEvents.broadcast(DeviceEvent{Type: "device.updated", Device: &updatedDevice})
+	return device.GPIO, nil
 }
 
 // CORS support is useful during Expo Web development.
-// Native Expo apps generally do not enforce browser CORS rules.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Control-Source")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
 }
@@ -156,7 +200,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Message: "Use GET for this endpoint"})
 		return
 	}
-
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Message: "Go device controller is running"})
 }
 
@@ -168,7 +211,13 @@ func devicesHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Message: "Use GET to list devices"})
 			return
 		}
-		writeJSON(w, http.StatusOK, DevicesResponse{Success: true, Devices: listDevices()})
+		devices, err := store.ListDevices(r.Context())
+		if err != nil {
+			log.Printf("Could not list devices: %v", err)
+			writeJSON(w, http.StatusInternalServerError, APIResponse{Message: "Could not load devices"})
+			return
+		}
+		writeJSON(w, http.StatusOK, DevicesResponse{Success: true, Devices: devices})
 		return
 	}
 
@@ -178,7 +227,12 @@ func devicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, exists := getDevice(deviceID)
+	device, exists, err := store.GetDevice(r.Context(), deviceID)
+	if err != nil {
+		log.Printf("Could not load device %d: %v", deviceID, err)
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Message: "Could not load device"})
+		return
+	}
 	if !exists {
 		writeJSON(w, http.StatusNotFound, APIResponse{Message: "Device not found"})
 		return
@@ -190,7 +244,6 @@ func devicesHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPatch:
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		defer r.Body.Close()
-
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		var update RenameDeviceRequest
@@ -210,55 +263,31 @@ func devicesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		devicesMu.Lock()
-		device.Name = name
-		devices[deviceID] = device
-		devicesMu.Unlock()
-		writeJSON(w, http.StatusOK, DeviceResponse{Success: true, Device: device})
+		startedAt := time.Now().UTC()
+		updatedDevice, _, err := store.RenameDevice(r.Context(), deviceID, name)
+		completedAt := time.Now().UTC()
+		record := ControlActionRecord{
+			ActionType: "DEVICE_RENAMED", Source: requestSource(r), DeviceID: &deviceID,
+			RequestedAction: name, PreviousState: device.State, ResultingState: device.State,
+			Success: err == nil, HTTPStatus: http.StatusOK, Message: "Device name updated",
+			StartedAt: startedAt, CompletedAt: completedAt,
+		}
+		if err != nil {
+			log.Printf("Could not rename device %d: %v", deviceID, err)
+			record.HTTPStatus = http.StatusInternalServerError
+			record.Message = "Could not save device name"
+			record.Success = false
+			recordAction(record)
+			writeJSON(w, http.StatusInternalServerError, APIResponse{Message: record.Message})
+			return
+		}
+		recordAction(record)
+		deviceEvents.broadcast(DeviceEvent{Type: "device.updated", Device: &updatedDevice})
+		writeJSON(w, http.StatusOK, DeviceResponse{Success: true, Device: updatedDevice})
 	default:
 		w.Header().Set("Allow", "GET, PATCH, OPTIONS")
 		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Message: "Use GET or PATCH for this endpoint"})
 	}
-}
-
-func executeESP32Command(ctx context.Context, deviceID int, action string) (int, error) {
-	device, exists := getDevice(deviceID)
-	if !exists {
-		return 0, fmt.Errorf("device %d not found", deviceID)
-	}
-
-	action = strings.ToUpper(strings.TrimSpace(action))
-	if action != "ON" && action != "OFF" {
-		return 0, fmt.Errorf("invalid action: %s", action)
-	}
-
-	espBody := fmt.Sprintf("device:%d\naction:%s\n", deviceID, action)
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, esp32URL, bytes.NewBufferString(espBody))
-	if err != nil {
-		return 0, fmt.Errorf("could not create ESP32 request: %w", err)
-	}
-	req.Header.Set("Content-Type", "text/plain")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("could not reach ESP32: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
-	if err != nil || len(body) > 4096 {
-		return 0, fmt.Errorf("could not read a valid ESP32 response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("ESP32 rejected the command with HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	setDeviceState(deviceID, action)
-	log.Printf("Device command successful: device=%d action=%s GPIO=%d", deviceID, action, device.GPIO)
-	return device.GPIO, nil
 }
 
 func ledHandler(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +299,6 @@ func ledHandler(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	defer r.Body.Close()
-
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var command LEDCommand
@@ -278,10 +306,20 @@ func ledHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, APIResponse{Message: "Invalid JSON. Expected device and action."})
 		return
 	}
-
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		writeJSON(w, http.StatusBadRequest, APIResponse{Message: "Request must contain exactly one JSON object"})
+		return
+	}
+
+	device, exists, err := store.GetDevice(r.Context(), command.Device)
+	if err != nil {
+		log.Printf("Could not load device %d: %v", command.Device, err)
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Message: "Could not load device"})
+		return
+	}
+	if !exists {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Message: "Invalid device. Choose a configured device."})
 		return
 	}
 
@@ -291,19 +329,71 @@ func ledHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gpio, err := executeESP32Command(r.Context(), command.Device, command.Action)
+	startedAt := time.Now().UTC()
+	record := ControlActionRecord{
+		ActionType: "DEVICE_COMMAND", Source: requestSource(r), DeviceID: &command.Device,
+		RequestedAction: command.Action, PreviousState: device.State, ResultingState: device.State,
+		Success: false, HTTPStatus: http.StatusBadGateway, Message: "Command did not complete",
+		StartedAt: startedAt,
+	}
+	defer func() {
+		record.CompletedAt = time.Now().UTC()
+		recordAction(record)
+	}()
+
+	espBody := fmt.Sprintf("device:%d\naction:%s\n", command.Device, command.Action)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, esp32URL, bytes.NewBufferString(espBody))
 	if err != nil {
-		log.Printf("LED command failed: %v", err)
-		writeJSON(w, http.StatusBadGateway, APIResponse{Message: err.Error()})
+		log.Printf("Could not create ESP32 request: %v", err)
+		record.HTTPStatus = http.StatusInternalServerError
+		record.Message = "Could not create ESP32 request"
+		writeJSON(w, record.HTTPStatus, APIResponse{Message: record.Message})
+		return
+	}
+	req.Header.Set("Content-Type", "text/plain")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("ESP32 request failed: %v", err)
+		record.Message = "Could not reach ESP32. Check its IP and Wi-Fi."
+		writeJSON(w, record.HTTPStatus, APIResponse{Message: record.Message})
+		return
+	}
+	defer resp.Body.Close()
+	record.ESPHTTPStatus = &resp.StatusCode
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+	if err != nil || len(body) > 4096 {
+		record.Message = "Could not read a valid ESP32 response"
+		writeJSON(w, record.HTTPStatus, APIResponse{Message: record.Message})
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("ESP32 returned HTTP %d: %s", resp.StatusCode, body)
+		record.Message = "ESP32 rejected the command"
+		writeJSON(w, record.HTTPStatus, APIResponse{Message: record.Message})
 		return
 	}
 
+	updatedDevice, err := store.SetDeviceState(r.Context(), command.Device, command.Action)
+	if err != nil {
+		log.Printf("Could not save state for device %d: %v", command.Device, err)
+		record.HTTPStatus = http.StatusInternalServerError
+		record.Message = "ESP32 accepted the command but the device state could not be saved"
+		writeJSON(w, record.HTTPStatus, APIResponse{Message: record.Message})
+		return
+	}
+
+	record.Success = true
+	record.HTTPStatus = http.StatusOK
+	record.ResultingState = updatedDevice.State
+	record.Message = "Device command executed successfully"
+	log.Printf("Device command successful: device=%d action=%s GPIO=%d", command.Device, command.Action, device.GPIO)
+	deviceEvents.broadcast(DeviceEvent{Type: "device.updated", Device: &updatedDevice})
 	writeJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Message: "Device command executed successfully",
-		Device:  command.Device,
-		Action:  command.Action,
-		GPIO:    gpio,
+		Success: true, Message: record.Message, Device: command.Device, Action: command.Action, GPIO: device.GPIO,
 	})
 }
 
@@ -313,88 +403,93 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Message: "Use POST for intent parsing"})
 		return
 	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	defer r.Body.Close()
-
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	var req IntentRequest
-	if err := decoder.Decode(&req); err != nil {
+	var intentRequest IntentRequest
+	if err := decoder.Decode(&intentRequest); err != nil {
 		writeJSON(w, http.StatusBadRequest, APIResponse{Message: "Invalid JSON. Expected 'text' field."})
 		return
 	}
-
-	rawText := strings.TrimSpace(req.Text)
-	if rawText == "" {
+	text := strings.TrimSpace(intentRequest.Text)
+	if text == "" {
 		writeJSON(w, http.StatusBadRequest, APIResponse{Message: "Text cannot be empty."})
 		return
 	}
 
 	devices := listDevices()
-	parsed := ParseIntent(rawText, devices)
+	parsed := ParseIntent(text, devices)
 
 	// Hybrid Fallback: If deterministic fuzzy matching failed or has marginal confidence,
 	// query the semantic decision engine (e.g. Laya / SLM).
 	if parsed.Intent == IntentUnknown || parsed.Confidence < 0.80 {
-		if semanticParsed, err := QuerySemanticFallback(r.Context(), rawText, devices); err == nil {
+		if semanticParsed, err := QuerySemanticFallback(r.Context(), text, devices); err == nil {
 			if semanticParsed.Intent != IntentUnknown && semanticParsed.Confidence >= 0.55 {
 				log.Printf("Fuzzy engine uncertain (intent=%s, conf=%.2f). Semantic fallback succeeded: %s -> %s (conf: %.2f, matched: %s, confirm: %v)",
-					parsed.Intent, parsed.Confidence, rawText, semanticParsed.Intent, semanticParsed.Confidence, semanticParsed.MatchedOn, semanticParsed.RequiresConfirmation)
+					parsed.Intent, parsed.Confidence, text, semanticParsed.Intent, semanticParsed.Confidence, semanticParsed.MatchedOn, semanticParsed.RequiresConfirmation)
 				parsed = semanticParsed
 			}
 		}
 	}
 
+	source := requestSource(r)
+	log.Printf("[VoiceIntent] Input: %q | Source: %s | Intent: %s | Action: %s | Target: %s | DeviceIDs: %v | Conf: %.2f | MatchedOn: %s",
+		text, source, parsed.Intent, parsed.Action, parsed.TargetName, parsed.DeviceIDs, parsed.Confidence, parsed.MatchedOn)
+
 	shouldExecute := true
-	if req.Execute != nil {
-		shouldExecute = *req.Execute
+	if intentRequest.Execute != nil {
+		shouldExecute = *intentRequest.Execute
 	}
 
-	resp := IntentResponse{
+	response := IntentResponse{
 		Success:              parsed.Intent != IntentUnknown,
 		Intent:               parsed,
 		Executed:             false,
 		RequiresConfirmation: parsed.RequiresConfirmation,
 	}
 
+	defer func() {
+		recordVoiceCommand(source, text, parsed, shouldExecute, response.Executed, response.Message)
+	}()
+
 	if parsed.Intent == IntentUnknown {
 		if parsed.Action != "" {
-			resp.Message = fmt.Sprintf("Action '%s' detected, but no matching device found. Try 'Prism', 'Halo', 'Ember', 'Nova', or 'all lights'.", parsed.Action)
+			response.Message = fmt.Sprintf("Action '%s' detected, but no matching device found. Try 'Prism', 'Halo', 'Ember', 'Nova', or 'all lights'.", parsed.Action)
 		} else {
-			resp.Message = "Could not recognize device command from speech"
+			response.Message = fmt.Sprintf("Could not recognize device command from speech: %q", text)
 		}
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
 	if parsed.Confidence < 0.70 {
-		resp.Success = false
-		resp.Message = fmt.Sprintf("Confidence too low (%.2f). Action ignored to prevent false triggers in noisy environment.", parsed.Confidence)
-		writeJSON(w, http.StatusOK, resp)
+		response.Success = false
+		response.Message = fmt.Sprintf("Confidence too low (%.2f) for %q. Action ignored to prevent false triggers in noisy environment.", parsed.Confidence, text)
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
-	if parsed.RequiresConfirmation && (req.Confirmed == nil || !*req.Confirmed) {
-		resp.Message = fmt.Sprintf("Confirmation required: %s on %s? Please confirm before executing.", parsed.Action, parsed.TargetName)
-		writeJSON(w, http.StatusOK, resp)
+	if parsed.RequiresConfirmation && (intentRequest.Confirmed == nil || !*intentRequest.Confirmed) {
+		response.Message = fmt.Sprintf("Confirmation required: %s on %s? Please confirm before executing.", parsed.Action, parsed.TargetName)
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
-	resp.Message = fmt.Sprintf("Parsed intent: %s (confidence: %.2f)", parsed.Intent, parsed.Confidence)
+	response.Message = fmt.Sprintf("Parsed intent: %s (confidence: %.2f)", parsed.Intent, parsed.Confidence)
 
 	if !shouldExecute || parsed.Intent == IntentQueryStatus {
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 
 	// Dispatch commands across matched devices
-	resp.Executed = true
-	resp.Results = make([]DeviceExecutionResult, 0, len(parsed.DeviceIDs))
+	response.Executed = true
+	response.Results = make([]DeviceExecutionResult, 0, len(parsed.DeviceIDs))
 
 	for _, deviceID := range parsed.DeviceIDs {
-		dev, exists := getDevice(deviceID)
-		if !exists {
+		device, exists, err := store.GetDevice(r.Context(), deviceID)
+		if err != nil || !exists {
 			continue
 		}
 
@@ -407,37 +502,56 @@ func intentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if parsed.Intent == IntentToggle || targetAction == "TOGGLE" {
-			if dev.State == "ON" {
+			if device.State == "ON" {
 				targetAction = "OFF"
 			} else {
 				targetAction = "ON"
 			}
 		}
 
-		gpio, err := executeESP32Command(r.Context(), deviceID, targetAction)
+		gpio, commandErr := executeESP32Command(r.Context(), deviceID, targetAction, source)
 		result := DeviceExecutionResult{
 			Device:  deviceID,
-			Name:    dev.Name,
-			GPIO:    dev.GPIO,
+			Name:    device.Name,
+			GPIO:    gpio,
 			State:   targetAction,
-			Success: err == nil,
+			Success: commandErr == nil,
 		}
-		if err != nil {
-			result.Error = err.Error()
-			result.State = dev.State
-		} else {
-			result.GPIO = gpio
+		if commandErr != nil {
+			result.Error = commandErr.Error()
+			result.State = device.State
 		}
-		resp.Results = append(resp.Results, result)
+		response.Results = append(response.Results, result)
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	var successCount int
+	for _, res := range response.Results {
+		if res.Success {
+			successCount++
+		}
+	}
+	if len(response.Results) > 0 {
+		if successCount == len(response.Results) {
+			response.Success = true
+			if len(response.Results) == 1 {
+				response.Message = fmt.Sprintf("Turned %s %s (confidence: %.0f%%)", response.Results[0].State, response.Results[0].Name, parsed.Confidence*100)
+			} else {
+				response.Message = fmt.Sprintf("Executed %s on %d devices (confidence: %.0f%%)", parsed.Intent, successCount, parsed.Confidence*100)
+			}
+		} else if successCount > 0 {
+			response.Success = true
+			response.Message = fmt.Sprintf("Partially executed: %d/%d devices responded", successCount, len(response.Results))
+		} else {
+			response.Success = false
+			response.Message = fmt.Sprintf("Hardware unreachable: %s", response.Results[0].Error)
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func main() {
-	// Set this to the URL printed or configured for your ESP32,
-	// e.g. http://192.168.1.105/led.
-	esp32URL = "http://192.168.137.64/led"
+	// Set this to the URL printed or configured for your ESP32.
+	esp32URL = "http://192.168.137.174/led"
 	if esp32URL == "" {
 		log.Fatal("ESP32_URL is missing. Set it to http://<ESP32-IP>/led")
 	}
@@ -445,11 +559,17 @@ func main() {
 		log.Fatal("ESP32_URL must start with http:// or https://")
 	}
 
+	var err error
+	store, err = openStore(context.Background())
+	if err != nil {
+		log.Fatalf("Could not initialize SQLite storage: %v", err)
+	}
+	defer store.Close()
+	deviceEvents = newDeviceEventHub()
+
 	httpClient = &http.Client{
-		Timeout: 5 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+		Timeout:       5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
 	mux := http.NewServeMux()
@@ -458,6 +578,8 @@ func main() {
 	mux.HandleFunc("/api/devices/", devicesHandler)
 	mux.HandleFunc("/api/led", ledHandler)
 	mux.HandleFunc("/api/intent", intentHandler)
+	mux.HandleFunc("/api/schedules", schedulesHandler)
+	mux.HandleFunc("/api/events", deviceEvents.serveHTTP)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -468,20 +590,21 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:              net.JoinHostPort("0.0.0.0", port),
-		Handler:           corsMiddleware(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		Addr: net.JoinHostPort("0.0.0.0", port), Handler: corsMiddleware(mux),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
-
 	log.Printf("Go device server starting on port %s", port)
+	log.Printf("SQLite database: %s", databaseFile)
 	log.Printf("ESP32 endpoint: %s", esp32URL)
 	log.Printf("Device endpoint: GET http://localhost:%s/api/devices", port)
 	log.Printf("LED endpoint: POST http://localhost:%s/api/led", port)
 	log.Printf("Intent endpoint: POST http://localhost:%s/api/intent", port)
-
+	log.Printf("Schedules endpoint: GET, POST http://localhost:%s/api/schedules", port)
+	log.Printf("Device events WebSocket: ws://localhost:%s/api/events", port)
+	schedulerStop := make(chan struct{})
+	defer close(schedulerStop)
+	go runScheduler(schedulerStop)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}

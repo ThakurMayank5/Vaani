@@ -48,10 +48,14 @@ func TestParseIntent_FuzzyASRMishearings(t *testing.T) {
 		expectedIntent IntentType
 		expectedDevice int
 	}{
-		// "prison" misheard for "prism"
+		// "prison" or "film" misheard for "prism"
 		{"turn on prison", IntentTurnOn, DeviceDeskLight},
-		// "helo" misheard for "halo"
+		{"Turn on the film.", IntentTurnOn, DeviceDeskLight},
+		{"turn on first light", IntentTurnOn, DeviceDeskLight},
+		// "helo" or "hello" misheard for "halo"
 		{"switch off helo", IntentTurnOff, DeviceReadingLight},
+		{"switch on hello", IntentTurnOn, DeviceReadingLight},
+		{"turn off second light", IntentTurnOff, DeviceReadingLight},
 		// "amber" misheard for "ember"
 		{"amber on", IntentTurnOn, DeviceAccentLight},
 		// "noah" misheard for "nova"

@@ -25,15 +25,20 @@ const (
 var defaultDeviceAliases = map[int][]string{
 	DeviceDeskLight: {
 		"desk", "desk lamp", "table light", "prism", "prison", "prizm", "prisms", "prismatic",
+		"film", "plism", "study lamp", "study light", "light 1", "light one", "device 1", "device one",
+		"one", "first", "first light", "1st light",
 	},
 	DeviceReadingLight: {
-		"reading", "read light", "book light", "halo", "helo",
+		"reading", "read light", "book light", "halo", "helo", "hello", "hailo", "bedside light", "bedside lamp",
+		"light 2", "light two", "device 2", "device two", "two", "second", "second light", "2nd light",
 	},
 	DeviceAccentLight: {
-		"accent", "ascent light", "ambient light", "ember", "amber", "amber light",
+		"accent", "ascent light", "ambient light", "ember", "amber", "amber light", "mood light",
+		"light 3", "light three", "device 3", "device three", "three", "third", "third light", "3rd light",
 	},
 	DeviceNightLight: {
-		"night", "nite light", "bed light", "nova", "noah", "nover", "novo",
+		"night", "nite light", "bed light", "nova", "noah", "nover", "novo", "sleep light",
+		"light 4", "light four", "device 4", "device four", "four", "fourth", "fourth light", "4th light",
 	},
 }
 
@@ -44,12 +49,15 @@ var globalAllowedTokens = map[string]bool{
 	"can": true, "could": true, "you": true, "would": true, "it": true,
 	"all": true, "every": true, "everything": true, "entire": true, "whole": true,
 	"room": true, "living": true, "house": true, "home": true,
-	"lights": true, "light": true,
+	"lights": true, "light": true, "devices": true, "device": true,
+	"hey": true, "vaani": true, "vani": true, "ok": true, "okay": true, "now": true, "just": true,
+	"sab": true, "saari": true, "sabhi": true, "kuch": true, "karo": true, "kar": true, "do": true, "band": true, "chalu": true,
 }
 
 // Global scope keywords triggering multi-device operations.
 var globalAllKeywords = []string{
 	"all", "all lights", "all the lights", "everything", "every light", "entire room", "whole room", "lights", "light",
+	"sab", "sab lights", "sab kuch", "saari lights", "sabhi lights", "all devices",
 }
 
 // ParsedIntent represents the structured command extracted from raw transcribed speech.
@@ -155,7 +163,7 @@ func DetectAction(clean string) (action string, actionConf float64, isQuery bool
 	// 1. Status query phrases (whole phrase match)
 	queryPhrases := []string{
 		"what is the status", "what are the lights", "is the light on", "is the light off",
-		"are the lights on", "are the lights off", "status", "state", "check",
+		"are the lights on", "are the lights off", "status", "state", "check", "kya status hai",
 	}
 	for _, qp := range queryPhrases {
 		if hasWholeWordOrPhrase(clean, qp) {
@@ -172,6 +180,7 @@ func DetectAction(clean string) (action string, actionConf float64, isQuery bool
 		"tune off", "tone off", "turned off", "turning off",
 		"deactivate", "kill", "disable", "stop",
 		"darken", "extinguish", "lights out",
+		"band karo", "band kar do", "band kar", "bujha do",
 	}
 	for _, op := range offPhrases {
 		if hasWholeWordOrPhrase(clean, op) {
@@ -186,6 +195,7 @@ func DetectAction(clean string) (action string, actionConf float64, isQuery bool
 		"term on", "tern on", "tune on", "tone on", "turned on", "turning on",
 		"activate", "enable", "start",
 		"illuminate", "illumination", "light up", "brighten",
+		"chalu karo", "chalu kar do", "chalu kar", "jala do", "on karo",
 	}
 	for _, op := range onPhrases {
 		if hasWholeWordOrPhrase(clean, op) {
@@ -198,12 +208,12 @@ func DetectAction(clean string) (action string, actionConf float64, isQuery bool
 	// (Prevents "on the desk" or "off a cliff" from triggering ON/OFF).
 	tokens := Tokenize(clean)
 	for i, token := range tokens {
-		if token == "off" || token == "out" {
+		if token == "off" || token == "out" || token == "band" {
 			if i == len(tokens)-1 || !determiners[tokens[i+1]] {
 				return "OFF", 0.85, false, false
 			}
 		}
-		if token == "on" {
+		if token == "on" || token == "chalu" {
 			if i == len(tokens)-1 || !determiners[tokens[i+1]] {
 				return "ON", 0.85, false, false
 			}
@@ -211,7 +221,7 @@ func DetectAction(clean string) (action string, actionConf float64, isQuery bool
 	}
 
 	// 5. Toggle phrases
-	togglePhrases := []string{"toggle", "flip", "invert"}
+	togglePhrases := []string{"toggle", "flip", "invert", "badal do"}
 	for _, tp := range togglePhrases {
 		if hasWholeWordOrPhrase(clean, tp) {
 			return "TOGGLE", 1.00, false, true
@@ -315,6 +325,11 @@ func ParseIntent(rawTranscript string, currentDevices []DeviceInfo) ParsedIntent
 			// The generic domain word "light" must never fuzzily match the specific qualifier "night".
 			candLower := strings.ToLower(cand.text)
 			if (candLower == "night" || candLower == "nite") && (span == "light" || span == "lights") {
+				continue
+			}
+			// Guard: "light on" vs "light one" differ by only 1 letter ('on' vs 'one', sim=0.89).
+			// The global command "light on" must never fuzzily match the specific alias "light one".
+			if candLower == "light one" && (span == "light on" || span == "lights on" || span == "light off" || span == "lights off") {
 				continue
 			}
 
